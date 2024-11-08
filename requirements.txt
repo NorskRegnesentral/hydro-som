@@ -1,0 +1,14 @@
+# Data analysis
+minisom
+pandas
+numpy
+scipy
+
+# Visualization
+plotly
+shapely
+jupyter
+
+# Convert plotly > images. Needed for showing images
+# on GitHub. Specific version due to issue on Windows
+kaleido==0.1.0.post1

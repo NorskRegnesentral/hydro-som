@@ -3,6 +3,7 @@ minisom
 pandas
 numpy
 scipy
+scikit-learn
 
 # Visualization
 plotly

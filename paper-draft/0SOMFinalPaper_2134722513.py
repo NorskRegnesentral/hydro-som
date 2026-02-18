@@ -1,10 +1,5 @@
-from ast import For
-import code
 import itertools
-import numbers
 from pathlib import Path
-from pyexpat import features
-import itertools
 
 import minisom
 import numpy as np
@@ -19,16 +14,11 @@ from plotly.colors import sample_colorscale, DEFAULT_PLOTLY_COLORS
 from plotly.subplots import make_subplots
 
 from scipy.cluster import hierarchy
-from scipy.cluster.hierarchy import dendrogram
-from sklearn.metrics import cluster, silhouette_score
+from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from IPython.display import Image
-from scipy import ndimage
-from matplotlib import cm
 from scipy.interpolate import griddata
-from sklearn.preprocessing import scale
 from docx import Document
-from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 

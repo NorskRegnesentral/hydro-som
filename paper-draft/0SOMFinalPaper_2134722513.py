@@ -505,12 +505,17 @@ for i, (row_index, col_index) in enumerate(subplot_ix[:len(input_columns)+1]):
         thickness = 20,
         len = 0.5 * (1 / subplot_rows),
         y = 1 - (row_index - 0.5) / subplot_rows,
-        x = 0.38 if col_index == 1 else 0.90
+        x = 0.38 if col_index == 1 else 0.90,
+        tickfont=dict(size=18),
+        tickvals=[0.0, 0.5, 1.0],
+        tickformat=".1f",
     )
     add_som_features(features_fig, row_index, col_index, i, colorbar_settings)
 
 add_training_cells(features_fig, subplot_ix[-1][0], subplot_ix[-1][1])
 add_cluster_boundaries(features_fig, subplot_ix[-1][0], subplot_ix[-1][1])
+# Add cluster boundaries to U-matrix plot
+add_cluster_boundaries(features_fig, subplot_ix[-2][0], subplot_ix[-2][1])
 
 
 for i, (row_index, col_index) in enumerate(subplot_ix):
@@ -862,26 +867,27 @@ show_figure(_fig)
 
 
  # Force all horizontal colorbars (fig_new / fig_sep) to span 0..1 with plt.stepstep 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
-for _fig in [locals().get('features_fig')]:
-    if not _fig:
-        continue
-    for tr in _fig.data:
-        mk = getattr(tr, 'marker', None)
-        cb = getattr(mk, 'colorbar', None)
-        if mk and cb:
-            cb.update(
-                orientation='h',
-                thickness=15,
-                len=0.25, 
-                x=0.5,
-                xanchor='center',
-                y=-0.15,
-                yanchor='top',
-                tickvals=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-                ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"],
-                ticks="outside",
-                tickfont=dict(size=18)
-            )
+# Commented out to keep vertical colorbars
+# for _fig in [locals().get('features_fig')]:
+#     if not _fig:
+#         continue
+#     for tr in _fig.data:
+#         mk = getattr(tr, 'marker', None)
+#         cb = getattr(mk, 'colorbar', None)
+#         if mk and cb:
+#             cb.update(
+#                 orientation='h',
+#                 thickness=15,
+#                 len=0.25, 
+#                 x=0.5,
+#                 xanchor='center',
+#                 y=-0.15,
+#                 yanchor='top',
+#                 tickvals=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+#                 ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"],
+#                 ticks="outside",
+#                 tickfont=dict(size=18)
+#             )
 
 #Shows SOM planes with horizontal scale bar
 #show_figure(features_fig)
@@ -2537,7 +2543,7 @@ fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
 print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
 
 
-show_figure(fig_biplot_enhanced)
+# show_figure(fig_biplot_enhanced)  # Removed figure #6
 
 # Print loading values in a formatted table
 print("\nFeature Loadings on PC1 and PC2:")
@@ -2713,7 +2719,7 @@ fig_biplot_enhanced.update_layout(
         tickfont=dict(size=16),
         constrain='domain',
         tickvals=[-1.0, -0.5, 0.0, 0.5, 1.0],
-        ticktext=["-1.0", "-0.5", "0.0", "0.5", "1.0"]
+        tickformat='.1f'
     ),
     yaxis=dict(
         gridcolor='white',
@@ -2727,7 +2733,7 @@ fig_biplot_enhanced.update_layout(
         tickfont=dict(size=18),
         constrain='domain',
         tickvals=[-1.0, -0.5, 0.0, 0.5, 1.0],
-        ticktext=["-1.0", "-0.5", "0.0", "0.5", "1.0"]
+        tickformat='.1f'
     ),
     font=dict(size=16)
 )

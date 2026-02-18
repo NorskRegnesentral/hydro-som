@@ -384,13 +384,14 @@ def add_cluster_boundaries(fig: go.Figure, row_index, col_index):
                 col=col_index,
             )
 
+
 def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings):
     if feature_index >= weights.shape[2]:
         w = umatrix.copy()
     else:
         # The value of the weights will refer to the transformed data. If we want
         # the original scale, we will need to apply the inverse transform here
-        w = weights[:, :, feature_index]
+        w = weights[:, :, feature_index].copy()
 
     w_min = w.min()
     w_max = w.max()
@@ -426,7 +427,12 @@ def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings)
         x=[0, 0],
         y=[0, 0],
         showlegend=False,
-        marker=dict(color=[w_min, w_max], colorscale=features_colorscale, size=0.001, colorbar=colorbar_settings),
+        marker=dict(
+            color=[w_min, w_max],
+            colorscale=features_colorscale,
+            size=0.001,
+            colorbar=colorbar_settings
+        ),
         row=row,
         col=col,
     )
@@ -832,13 +838,15 @@ for i, (row_index, col_index) in enumerate(subplot_ix):
 
 # Save dataframe as CSV in specified folder
 output_folder = Path('H:/Python/Self_Org_Map/As_Progr_for-Som/A0_Es_Final_2')
-output_folder.mkdir(parents=True, exist_ok=True)
 
 df = pd.DataFrame(df)
 df['log_cluster_label'] = np.log(df['cluster_label'])
 output_file = output_folder / 'myoutputforTDS.csv'
-df.to_csv(output_file, index=False)
-
+try:
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_file, index=False)
+except FileNotFoundError as e:
+    print(f"Error saving file: {e}")
 
 
 # Save each cluster to a separate CSV file
@@ -1063,31 +1071,37 @@ features_to_save = ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']
 
 # Create output directory for neuron weights
 neuron_weights_dir = Path('H:/Python/Self_Org_Map/As_Progr_for-Som/A0_Es_Final_2/neuron_weights')
-neuron_weights_dir.mkdir(parents=True, exist_ok=True)
+write_neurons = True
+try:
+    neuron_weights_dir.mkdir(parents=True, exist_ok=True)
+except FileNotFoundError as e:
+    print(f"Error creating directory: {e}")
+    write_neurons = False
 
-for feature_name in features_to_save:
-    if feature_name in input_columns:
-        feat_idx = input_columns.index(feature_name)
-        
-        # Get the weight matrix for this feature
-        feature_weights = weights[:, :, feat_idx]
-        
-        # Create DataFrame with neuron coordinates
-        neuron_data = []
-        for i in range(final_nx):
-            for j in range(final_ny):
-                neuron_data.append({
-                    'Neuron_X': i,
-                    'Neuron_Y': j,
-                    'Weight': feature_weights[i, j]
-                })
-        
-        neuron_df = pd.DataFrame(neuron_data)
-        
-        # Save to Excel file in the specified folder
-        output_filename = neuron_weights_dir / f'neuron_weights_{feature_name}.xlsx'
-        neuron_df.to_excel(output_filename, index=False)
-        
+if write_neurons:
+    for feature_name in features_to_save:
+        if feature_name in input_columns:
+            feat_idx = input_columns.index(feature_name)
+
+            # Get the weight matrix for this feature
+            feature_weights = weights[:, :, feat_idx]
+
+            # Create DataFrame with neuron coordinates
+            neuron_data = []
+            for i in range(final_nx):
+                for j in range(final_ny):
+                    neuron_data.append({
+                        'Neuron_X': i,
+                        'Neuron_Y': j,
+                        'Weight': feature_weights[i, j]
+                    })
+
+            neuron_df = pd.DataFrame(neuron_data)
+
+            # Save to Excel file in the specified folder
+            output_filename = neuron_weights_dir / f'neuron_weights_{feature_name}.xlsx'
+            neuron_df.to_excel(output_filename, index=False)
+
 #         print(f"Saved {feature_name} neuron weights to '{output_filename}'")
 
 # print("="*50 + "\n")

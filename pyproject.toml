@@ -1,0 +1,19 @@
+[project]
+name = "som"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.6",
+    "minisom>=2.3.5",
+    "numpy>=2.3.3",
+    "openpyxl>=3.1.5",
+    "pandas>=2.3.2",
+    "plotly>=6.3.0",
+    "python-docx>=1.2.0",
+    "scikit-learn>=1.7.2",
+    "scipy>=1.16.2",
+    "shapely>=2.1.1",
+]

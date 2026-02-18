@@ -34,7 +34,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 # Parameters
 
-data_path = Path('H:\\Python\\Self_Org_Map\\As_Progr_for-Som\\A0_Es_Final_2\\a_data_Paper.csv')
+data_path = Path(__file__).parent / 'a_data_Paper.csv'
 input_columns = ['F4','F5','F7','F8','F9', 'pH_L']
 
 

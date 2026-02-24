@@ -275,6 +275,18 @@ som.train(transformed_data, som_max_iterations)
 xx, yy = som.get_euclidean_coordinates()
 umatrix = som.distance_map()
 weights = som.get_weights()
+
+# Per-feature normalisation of weights to the 0-1 interval.
+# Many downstream operations (isolines, colour mapping, PC-neuron maps,
+# statistics) work in this normalised space.  The original `weights` array
+# is kept unchanged for tasks that need the transformed-data scale (e.g.
+# hierarchical clustering).
+weights_normalized = np.empty_like(weights)
+for _k in range(weights.shape[2]):
+    _wk = weights[:, :, _k]
+    _wk_min, _wk_max = _wk.min(), _wk.max()
+    weights_normalized[:, :, _k] = (_wk - _wk_min) / (_wk_max - _wk_min)
+
 win_map = som.win_map(transformed_data, return_indices = True)
 
 # Print quantization and topographic errors for the trained model
@@ -483,19 +495,19 @@ def add_cluster_boundaries(fig: go.Figure, row_index, col_index):
 
 
 def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings):
-    if feature_index >= weights.shape[2]:
+    if feature_index >= weights_normalized.shape[2]:
         w = umatrix.copy()
+        # Normalise u-matrix to 0-1 for colour mapping
+        w_min, w_max = w.min(), w.max()
+        w_01 = (w - w_min) / (w_max - w_min)
     else:
-        # The value of the weights will refer to the transformed data. If we want
-        # the original scale, we will need to apply the inverse transform here
+        # Use pre-computed normalised weights (0-1 per feature)
+        w_01 = weights_normalized[:, :, feature_index]
         w = weights[:, :, feature_index]
+        w_min, w_max = w.min(), w.max()
 
-    w_min = w.min()
-    w_max = w.max()
-    w -= w.min()
-    w /= w.max()
     colors = np.array(
-        sample_colorscale(features_colorscale, w.flatten())
+        sample_colorscale(features_colorscale, w_01.flatten())
     ).reshape(final_nx, final_ny)
 
 
@@ -633,7 +645,7 @@ for i, (row_index, col_index) in enumerate(subplot_ix):
 # Compute per-neuron PC1 score (vectorised: shape [nx, ny])
 n_features = len(input_columns)
 pc1_neuron_map = (
-    weights.reshape(-1, n_features) @ pca.components_[0]
+    weights_normalized.reshape(-1, n_features) @ pca.components_[0]
 ).reshape(final_nx, final_ny)
 pc1_isoline_value = pc1_neuron_map.mean()
 
@@ -656,7 +668,7 @@ for feat_name, isoline_vals in isoline_config.items():
     # Green dashed background isolines
     add_isolines_to_som(
         features_fig,
-        weights[:, :, feat_idx],
+        weights_normalized[:, :, feat_idx],
         (xx, yy),
         feat_name,
         isoline_vals,
@@ -667,7 +679,7 @@ for feat_name, isoline_vals in isoline_config.items():
     if feat_name in isoline_colors:
         add_isolines_to_som(
             features_fig,
-            weights[:, :, feat_idx],
+            weights_normalized[:, :, feat_idx],
             (xx, yy),
             feat_name,
             list(isoline_colors[feat_name].keys()),
@@ -764,7 +776,7 @@ print("="*50)
 for feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
     if feature_name in input_columns:
         feat_idx = input_columns.index(feature_name)
-        feature_weights = weights[:, :, feat_idx].reshape(-1, 1)
+        feature_weights = weights_normalized[:, :, feat_idx].reshape(-1, 1)
         
         # Calculate Ward's linkage for this feature
         ward_linkage = hierarchy.linkage(feature_weights, method='ward', metric='euclidean')
@@ -786,7 +798,7 @@ for feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
         feat_idx = input_columns.index(feature_name)
         # Get the feature data from the transformed data
         #feature_data = transformed_data[:, feat_idx]
-        feature_data = weights[:, :, feat_idx].reshape(-1)
+        feature_data = weights_normalized[:, :, feat_idx].reshape(-1)
         
         # Calculate variance
         #variance = np.var(feature_data)
@@ -807,7 +819,7 @@ for feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
     if feature_name in input_columns:
         feat_idx = input_columns.index(feature_name)
         # Get the feature weights from the SOM
-        feature_weights = weights[:, :, feat_idx].flatten()
+        feature_weights = weights_normalized[:, :, feat_idx].flatten()
         
         # Calculate min, max, and mean
         mean_weight = feature_weights.mean()
@@ -895,7 +907,7 @@ for feature_name in features_to_save:
         feat_idx = input_columns.index(feature_name)
         
         # Get the weight matrix for this feature
-        feature_weights = weights[:, :, feat_idx]
+        feature_weights = weights_normalized[:, :, feat_idx]
         
         # Create DataFrame with neuron coordinates
         neuron_data = []
@@ -939,7 +951,7 @@ if write_neurons:
             feat_idx = input_columns.index(feature_name)
 
             # Get the weight matrix for this feature
-            feature_weights = weights[:, :, feat_idx]
+            feature_weights = weights_normalized[:, :, feat_idx]
 
             # Create DataFrame with neuron coordinates
             neuron_data = []
@@ -1053,7 +1065,7 @@ for feature_name in features_to_save:
         feat_idx = input_columns.index(feature_name)
         
         # Get the weight matrix for this feature
-        feature_weights = weights[:, :, feat_idx]
+        feature_weights = weights_normalized[:, :, feat_idx]
         
         # Create DataFrame with neuron coordinates
         neuron_data = []
@@ -1171,7 +1183,7 @@ for i, (row_index, col_index) in enumerate(subplot_ix_boundaries_isolines[:len(i
         if feat_name in isoline_config:
             add_isolines_to_som(
                 fig_with_boundaries_isolines,
-                weights[:, :, i],
+                weights_normalized[:, :, i],
                 (xx, yy),
                 feat_name,
                 isoline_config[feat_name],
@@ -1272,9 +1284,9 @@ hdr_cells[3].text = 'Ward Distance'
 for feature_name in input_columns:
     if feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
         feat_idx = input_columns.index(feature_name)
-        feature_weights = weights[:, :, feat_idx].flatten()
-        feature_data = weights[:, :, feat_idx].reshape(-1)
-        feature_weights_2d = weights[:, :, feat_idx].reshape(-1, 1)
+        feature_weights = weights_normalized[:, :, feat_idx].flatten()
+        feature_data = weights_normalized[:, :, feat_idx].reshape(-1)
+        feature_weights_2d = weights_normalized[:, :, feat_idx].reshape(-1, 1)
         
         mean_weight = feature_weights.mean()
         variance = np.var(feature_data)
@@ -1397,7 +1409,7 @@ for feature_name in input_columns:
     feat_idx = input_columns.index(feature_name)
     
     # Get the weight matrix for this feature
-    feature_weights = weights[:, :, feat_idx]
+    feature_weights = weights_normalized[:, :, feat_idx]
     
     # Calculate sum of weights
     sum_weights = np.sum(feature_weights)
@@ -1585,7 +1597,7 @@ pc2_neuron_map = np.zeros((final_nx, final_ny))
 for i in range(final_nx):
     for j in range(final_ny):
         # Get weights for this neuron across all features
-        neuron_weights = weights[i, j, :]
+        neuron_weights = weights_normalized[i, j, :]
         
         # Calculate PC2 value as dot product of neuron weights and PC2 loadings
         pc2_neuron_map[i, j] = np.dot(neuron_weights, pca.components_[1, :])
@@ -1768,7 +1780,7 @@ for k, boundary in cluster_boundaries.items():
 for feat_name, color_dict in isoline_colors.items():
     if feat_name in input_columns:
         feat_idx = input_columns.index(feat_name)
-        som_weights = weights[:, :, feat_idx]
+        som_weights = weights_normalized[:, :, feat_idx]
         
         points = np.column_stack([xx.flatten(), yy.flatten()])
         values = som_weights.flatten()

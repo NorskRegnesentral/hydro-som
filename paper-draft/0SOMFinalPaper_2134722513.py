@@ -65,12 +65,129 @@ pio.templates.default = 'plotly_white'
 pio.renderers.default = 'browser' # Set to browser if not already
 plotly_interactive = True
 
+colorbar_tickvals = [0.0, 0.25, 0.5, 0.75, 1.0]
+colorbar_tickformat = ".2f"
+
+# Isoline configuration  ─────────────────────────────────────────────────────
+# Background contour levels drawn per feature (normalised weight-space values)
+isoline_config = {
+    'F4': [0.2, 0.25, 0.36, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.85, 0.9, 1.0],
+    'F5': [0.1, 0.2, 0.3,  0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8],
+    'F7': [0.1, 0.2, 0.25, 0.3, 0.32, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9],
+    'F8': [0.1, 0.2, 0.3, 0.35, 0.44, 0.5, 0.55, 0.6, 0.65, 0.7],
+    'F9': [0.1, 0.2, 0.25, 0.3, 0.4, 0.55, 0.6, 0.65, 0.7, 0.72, 0.75],
+}
+
+# Highlighted (coloured) isoline values – drawn on top of the green background
+isoline_colors = {
+    #'F3': {0.38: 'darkorange'},
+    'F4': {0.31: 'darkorange'},
+    'F5': {0.59: 'darkorange', 0.72: 'darkorange'},
+    'F7': {0.14: 'darkorange'},
+    'F8': {0.37: 'darkorange'},
+    'F9': {0.48: 'darkorange'},
+}
+
+# Dash styles for the highlighted isolines
+isoline_styles = {
+    #'F3': {0.38: 'solid'},
+    'F4': {0.31: 'solid'},
+    'F5': {0.59: 'solid', 0.72: 'dashdot'},
+    'F7': {0.14: 'solid'},
+    'F8': {0.37: 'solid'},
+    'F9': {0.48: 'solid'},
+}
+
 # Convenience function to allow changing between interactive and static images
 def show_figure(fig: go.Figure):
     if plotly_interactive:
         fig.show()
     else:
         return Image(data=fig.to_image(format='png', scale=2))
+
+
+def add_isolines_to_som(fig, som_weights, coords, feature_name, isoline_values, row, col,
+                        color_map=None, style_map=None):
+    """
+    Add contour isolines to a SOM feature plane.
+
+    Parameters
+    ----------
+    fig            : plotly Figure
+    som_weights    : 2-D array  weight matrix for one feature
+    coords         : (xx, yy) euclidean coordinate arrays
+    feature_name   : str (informational only)
+    isoline_values : list of float  contour levels to draw
+    row, col       : subplot position
+    color_map      : dict {value: color}  per-value colour (default: 'darkgreen')
+    style_map      : dict {value: dash}   per-value dash   (default: 'dash')
+    """
+    xx, yy = coords
+    points = np.column_stack([xx.flatten(), yy.flatten()])
+    values = som_weights.flatten()
+    grid_x = np.linspace(xx.min(), xx.max(), 100)
+    grid_y = np.linspace(yy.min(), yy.max(), 100)
+    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
+    grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
+
+    for isoline_val in isoline_values:
+        color = (color_map or {}).get(isoline_val, 'darkgreen')
+        dash  = (style_map or {}).get(isoline_val, 'dash')
+        width = 4.0 if color_map and isoline_val in color_map else 3.0
+
+        fig_temp = plt.figure()
+        ax_temp  = fig_temp.add_subplot(111)
+        contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[isoline_val])
+        plt.close(fig_temp)
+
+        if not contours.allsegs:
+            continue
+        for seg in contours.allsegs[0]:
+            fig.add_scatter(
+                x=seg[:, 0], y=seg[:, 1],
+                mode='lines',
+                line=dict(color=color, width=width, dash=dash),
+                showlegend=False,
+                hoverinfo='skip',
+                row=row, col=col,
+            )
+
+
+def add_pc1_isolines(fig, coords, pc1_neuron_map, pc1_isoline_value, row, col):
+    """
+    Draw the mean-PC1 isoline (red dotted) on one SOM subplot.
+
+    Parameters
+    ----------
+    fig               : plotly Figure
+    coords            : (xx, yy) euclidean coordinate arrays
+    pc1_neuron_map    : 2-D array  per-neuron PC1 scores
+    pc1_isoline_value : float     contour level (typically the map mean)
+    row, col          : subplot position
+    """
+    xx, yy = coords
+    points  = np.column_stack([xx.flatten(), yy.flatten()])
+    values  = pc1_neuron_map.flatten()
+    grid_x  = np.linspace(xx.min(), xx.max(), 100)
+    grid_y  = np.linspace(yy.min(), yy.max(), 100)
+    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
+    grid_z  = griddata(points, values, (grid_xx, grid_yy), method='cubic')
+
+    fig_temp = plt.figure()
+    ax_temp  = fig_temp.add_subplot(111)
+    contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc1_isoline_value])
+    plt.close(fig_temp)
+
+    if len(contours.allsegs) > 0:
+        for path in contours.allsegs[0]:
+            fig.add_scatter(
+                x=path[:, 0], y=path[:, 1],
+                mode='lines',
+                line=dict(color='red', width=4.5, dash='dot'),
+                showlegend=False,
+                hoverinfo='skip',
+                row=row, col=col,
+            )
 
 
 # Read input data
@@ -493,8 +610,8 @@ for i, (row_index, col_index) in enumerate(subplot_ix[:len(input_columns)+1]):
         y = 1 - (row_index - 0.5) / subplot_rows,
         x = 0.38 if col_index == 1 else 0.90,
         tickfont=dict(size=18),
-        tickvals=[0.0, 0.25, 0.5, 0.75, 1.0],
-        tickformat=".1f",
+        tickvals=colorbar_tickvals,
+        tickformat=colorbar_tickformat,
     )
     add_som_features(features_fig, row_index, col_index, i, colorbar_settings)
 
@@ -510,298 +627,61 @@ for i, (row_index, col_index) in enumerate(subplot_ix):
     sp.yaxis.showticklabels = False
     sp.xaxis.showticklabels = False
 
-   
-
 ## -------------------------------------------------------
-    # Draw isolines for specific SOM planes
+# Draw isolines for SOM feature planes
 
-    def add_isolines_to_som(fig, som_weights, coords, hexagons, feature_name, isoline_values, row, col):
-        """
-        Add contour isolines to a SOM plane.
-        
-        Parameters:
-        - fig: plotly figure object
-        - som_weights: weight matrix for the specific feature
-        - coords: euclidean coordinates (xx, yy)
-        - hexagons: hexagon coordinates for plotting
-        - feature_name: name of the feature
-        - isoline_values: list of values for which to draw isolines
-        - row, col: subplot position
-        """
-        xx, yy = coords
-        
-        # Create interpolated grid for smoother contours
-        points = np.column_stack([xx.flatten(), yy.flatten()])
-        values = som_weights.flatten()
-        
-        # Create fine grid
-        grid_x = np.linspace(xx.min(), xx.max(), 100)
-        grid_y = np.linspace(yy.min(), yy.max(), 100)
-        grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-        
-        # Interpolate
-        grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-        
-        # Generate contours using matplotlib (then extract and plot in plotly)
-        fig_temp = plt.figure()
-        ax_temp = fig_temp.add_subplot(111)
-        contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=isoline_values, colors='black', linewidths=2)
-        plt.close(fig_temp)
-      
-        
-        # Extract contour paths and add to plotly figure
-        for level_idx in range(len(contours.levels)):
-            paths = contours.get_paths()[level_idx] if hasattr(contours, 'get_paths') else contours.allsegs[level_idx]
-            if not isinstance(paths, list):
-                paths = [paths]
-            for path in paths:
-                vertices = path.vertices if hasattr(path, 'vertices') else path
-                fig.add_scatter(
-                    x=vertices[:, 0],
-                    y=vertices[:, 1],
-                    mode='lines',
-                    line=dict(color='darkgreen', width=3.0, dash='dash'),
-                    showlegend=False,
-                    hoverinfo='skip',
-                    row=row,
-                    col=col
-                )
+# Compute per-neuron PC1 score (vectorised: shape [nx, ny])
+n_features = len(input_columns)
+pc1_neuron_map = (
+    weights.reshape(-1, n_features) @ pca.components_[0]
+).reshape(final_nx, final_ny)
+pc1_isoline_value = pc1_neuron_map.mean()
 
-    
-   
-    # Define isoline values for each feature
-    isoline_config = {
-              
-        'F4': [0.2, 0.25, 0.36, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.85, 0.9, 1.0],
-        'F5': [0.1, 0.2, 0.3,  0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8],
-        'F7': [0.1,  0.2, 0.25, 0.3, 0.32, 0.4, 0.45, 0.5, 0.6, 0.7, 0.8, 0.9],
-        'F8': [0.1, 0.2, 0.3, 0.35, 0.44, 0.5, 0.55, 0.6, 0.65, 0.7],
-        'F9': [0.1, 0.2, 0.25, 0.3, 0.4, 0.55, 0.6, 0.65, 0.7, 0.72, 0.75],
-       
-    }
- 
-    # Add isolines to the features_fig (main SOM visualization)
-    if 'features_fig' in locals() and 'weights' in locals():
-        for feat_name, isoline_vals in isoline_config.items():
-            if feat_name in input_columns:
-                feat_idx = input_columns.index(feat_name)
-                # Find subplot position
-                plot_position = feat_idx
-                row_idx = subplot_ix[plot_position][0]
-                col_idx = subplot_ix[plot_position][1]
-                
-                add_isolines_to_som(
-                    features_fig,
-                    weights[:, :, feat_idx],
-                    (xx, yy),
-                    hexagons,
-                    feat_name,
-                    isoline_vals,
-                    row_idx,
-                    col_idx
-                )
+print(f"\nPC1 Isoline Value (mean): {pc1_isoline_value:.6f}")
+print(f"PC1 range: [{pc1_neuron_map.min():.6f}, {pc1_neuron_map.max():.6f}]")
+print("="*50)
 
-# Define isoline colors for specific values
-    isoline_colors = {
-        #'F3': {0.38: 'darkorange'},
-        'F4': {0.31: 'darkorange'},
-        'F5': {0.59: 'darkorange', 0.72: 'darkorange'},
-        'F7': {0.14: 'darkorange'},
-        'F8': {0.37: 'darkorange'},
-        'F9': {0.48: 'darkorange'},  
-    }
+print("\n" + "="*50)
+print("PC1 Value for Each Neuron")
+print("="*50)
+print(f"\nPC1 neuron values - Min: {pc1_neuron_map.min():.6f}, Max: {pc1_neuron_map.max():.6f}, Mean: {pc1_neuron_map.mean():.6f}")
+print("="*50 + "\n")
 
-    # Define isoline styles for specific values
-    isoline_styles = {
-        #'F3': {0.38: 'solid'},
-        'F4': {0.31: 'solid'},
-        'F5': {0.59: 'solid', 0.72: 'dashdot'}, 
-        'F7': {0.14: 'solid'},
-        'F8': {0.37: 'solid'},
-        'F9': {0.48: 'solid'},
-    }
+for feat_name, isoline_vals in isoline_config.items():
+    if feat_name not in input_columns:
+        continue
+    feat_idx = input_columns.index(feat_name)
+    row_idx, col_idx = subplot_ix[feat_idx]
 
+    # Green dashed background isolines
+    add_isolines_to_som(
+        features_fig,
+        weights[:, :, feat_idx],
+        (xx, yy),
+        feat_name,
+        isoline_vals,
+        row_idx, col_idx,
+    )
 
+    # Highlighted (coloured) isolines for key threshold values
+    if feat_name in isoline_colors:
+        add_isolines_to_som(
+            features_fig,
+            weights[:, :, feat_idx],
+            (xx, yy),
+            feat_name,
+            list(isoline_colors[feat_name].keys()),
+            row_idx, col_idx,
+            color_map=isoline_colors[feat_name],
+            style_map=isoline_styles.get(feat_name, {}),
+        )
 
-    # Add colored isolines to the features_fig (main SOM visualization)
-    if 'features_fig' in locals() and 'weights' in locals():
-        for feat_name, color_dict in isoline_colors.items():
-            if feat_name in input_columns:
-                feat_idx = input_columns.index(feat_name)
-                # Find subplot position
-                plot_position = feat_idx
-                row_idx = subplot_ix[plot_position][0]
-                col_idx = subplot_ix[plot_position][1]
-                
-                # Get the weight matrix for this feature
-                som_weights = weights[:, :, feat_idx]
-                
-                # Create interpolated grid for smoother contours
-                points = np.column_stack([xx.flatten(), yy.flatten()])
-                values = som_weights.flatten()
-                
-                # Create fine grid
-                grid_x = np.linspace(xx.min(), xx.max(), 100)
-                grid_y = np.linspace(yy.min(), yy.max(), 100)
-                grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-                
-                # Interpolate
-                grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-                
-                # Draw isolines for specific values with specified colors
-                for isoline_val, color in color_dict.items():
-                    fig_temp = plt.figure()
-                    ax_temp = fig_temp.add_subplot(111)
-                    contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[isoline_val], colors='black', linewidths=3.0)
-                    plt.close(fig_temp)
-                    
-                    # Get the line style for this isoline value
-                    line_style = 'solid'  # default
-                    if feat_name in isoline_styles and isoline_val in isoline_styles[feat_name]:
-                        line_style = isoline_styles[feat_name][isoline_val]
-                    
-                    # Extract contour paths and add to plotly figure
-                    for level_idx in range(len(contours.levels)):
-                        paths = contours.allsegs[level_idx]
-                        for path in paths:
-                            features_fig.add_scatter(
-                                x=path[:, 0],
-                                y=path[:, 1],
-                                mode='lines',
-                                line=dict(color=color, width=4.0, dash=line_style),
-                                showlegend=False,
-                                hoverinfo='skip',
-                                row=row_idx,
-                                col=col_idx
-                            )
-    # Add isolines to the features_fig (main SOM visualization)
-    if 'features_fig' in locals() and 'weights' in locals():
-        for feat_name, isoline_vals in isoline_config.items():
-            if feat_name in input_columns:
-                feat_idx = input_columns.index(feat_name)
-                # Find subplot position
-                plot_position = feat_idx
-                row_idx = subplot_ix[plot_position][0]
-                col_idx = subplot_ix[plot_position][1]
-                
-                add_isolines_to_som(
-                    features_fig,
-                    weights[:, :, feat_idx],
-                    (xx, yy),
-                    hexagons,
-                    feat_name,
-                    isoline_vals,
-                    row_idx,
-                    col_idx
-                )
+# PC1 isoline on every feature subplot
+for feat_name in input_columns:
+    feat_idx = input_columns.index(feat_name)
+    row_idx, col_idx = subplot_ix[feat_idx]
+    add_pc1_isolines(features_fig, (xx, yy), pc1_neuron_map, pc1_isoline_value, row_idx, col_idx)
 
-                # Calculate PC1 value for each neuron (same across all features)
-                # PC1_neuron = sum(wji * Li) where wji are neuron weights, Li are PC1 loadings
-                
-                pc1_neuron_map = np.zeros((final_nx, final_ny))
-                
-                for i in range(final_nx):
-                    for j in range(final_ny):
-                        # Get weights for this neuron across all features
-                        neuron_weights = weights[i, j, :]
-                        
-                        # Calculate PC1 value as dot product of neuron weights and PC1 loadings
-                        pc1_neuron_map[i, j] = np.dot(neuron_weights, pca.components_[0, :])
-                
-                # Use mean PC1 value as the isoline threshold
-                pc1_isoline_value = np.mean(pc1_neuron_map)
-
-                print(f"\nPC1 Isoline Value (mean): {pc1_isoline_value:.6f}")
-                print(f"PC1 range: [{pc1_neuron_map.min():.6f}, {pc1_neuron_map.max():.6f}]")
-                print("="*50)
-
-                # Add PC1 isolines to each feature plot (using PC1 neuron map)
-                def add_pc1_isolines(fig, coords, hexagons, feature_name, row, col):
-                    """
-                    Add PC1 isoline to a SOM plane based on PC1 neuron values.
-                    This ensures the same geometric line across all feature plots.
-                    """
-                    xx, yy = coords
-                    
-                    # Create interpolated grid for smoother contours using PC1 neuron map
-                    points = np.column_stack([xx.flatten(), yy.flatten()])
-                    values = pc1_neuron_map.flatten()
-                    
-                    # Create fine grid
-                    grid_x = np.linspace(xx.min(), xx.max(), 100)
-                    grid_y = np.linspace(yy.min(), yy.max(), 100)
-                    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-                    
-                    # Interpolate PC1 values
-                    grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-                    
-                    # Generate contour for PC1 isoline value
-                    fig_temp = plt.figure()
-                    ax_temp = fig_temp.add_subplot(111)
-                    contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc1_isoline_value], colors='black', linewidths=2)
-                    plt.close(fig_temp)
-                    
-                    # Extract contour paths and add to plotly figure
-                    if len(contours.allsegs) > 0:
-                        for path in contours.allsegs[0]:
-                            fig.add_scatter(
-                                x=path[:, 0],
-                                y=path[:, 1],
-                                mode='lines',
-                                line=dict(color='red', width=4.5, dash='dot'),
-                                showlegend=False,
-                                hoverinfo='skip',
-                                row=row,
-                                col=col
-                            )
-
-                # Add PC1 isolines to all feature plots
-                pc1_features = input_columns.copy()
-                # if 'pH_L' in pc1_features:
-                #     pc1_features.remove('pH_L')  # Exclude pH_L if present
-
-                for feat_name in pc1_features:
-                    if feat_name in input_columns:
-                        feat_idx = input_columns.index(feat_name)
-                        plot_position = feat_idx
-                        row_idx = subplot_ix[plot_position][0]
-                        col_idx = subplot_ix[plot_position][1]
-                        
-                        add_pc1_isolines(
-                            features_fig,
-                            (xx, yy),
-                            hexagons,
-                            feat_name,
-                            row_idx,
-                            col_idx
-                        )
-
-                # print(f"PC1 isolines added to feature plots (excluding pH_L)")
-                # print("="*50 + "\n")
-
-                # Print PC1 value for each neuron
-                print("\n" + "="*50)
-                print("PC1 Value for Each Neuron")
-                print("="*50)
-
-                # Calculate PC1 value for each neuron
-                pc1_neuron_values = np.zeros((final_nx, final_ny))
-
-                for i in range(final_nx):
-                    for j in range(final_ny):
-                        # Get weights for this neuron across all features
-                        neuron_weights = weights[i, j, :]
-                        
-                        # Calculate PC1 value as dot product of neuron weights and PC1 loadings
-                        pc1_value = np.dot(neuron_weights, pca.components_[0, :])
-                        pc1_neuron_values[i, j] = pc1_value
-                        
-                        #print(f"Neuron ({i}, {j}): PC1 = {pc1_value:.6f}")
-
-                print(f"\nPC1 neuron values - Min: {pc1_neuron_values.min():.6f}, Max: {pc1_neuron_values.max():.6f}, Mean: {pc1_neuron_values.mean():.6f}")
-                print("="*50 + "\n")
-
-  
 
 
 # Calculate PC1 general isoline value (it must be the same for all features) by equation: (sum(sum(wji*Li))/K), where K is the amount of neurons, wji are the weights of neurons, Li are Lodings of PCA. Construct PC1 isoline on the each feature plot as red dotted line.
@@ -1293,22 +1173,21 @@ for i, (row_index, col_index) in enumerate(subplot_ix_boundaries_isolines[:len(i
                 fig_with_boundaries_isolines,
                 weights[:, :, i],
                 (xx, yy),
-                hexagons,
                 feat_name,
                 isoline_config[feat_name],
                 row_index,
-                col_index
+                col_index,
             )
-        
+
         # Add PC1 isolines
-        if feat_name in pc1_features:
+        if feat_name in input_columns:
             add_pc1_isolines(
                 fig_with_boundaries_isolines,
                 (xx, yy),
-                hexagons,
-                feat_name,
+                pc1_neuron_map,
+                pc1_isoline_value,
                 row_index,
-                col_index
+                col_index,
             )
 
 # Add clusters plot
@@ -1462,13 +1341,12 @@ p = doc.add_paragraph()
 p.add_run('Darkorange Isolines:\n')
 p.add_run('These critical isolines represent threshold values that separate distinct hydrochemical regimes:\n\n')
 
-if 'isoline_colors' in locals():
-    for feat_name, color_dict in isoline_colors.items():
-        if feat_name in input_columns:
-            feat_idx = input_columns.index(feat_name)
-            for isoline_val in color_dict.keys():
-                p.add_run(f'• {feat_name} = {isoline_val:.2f}: ')
-                p.add_run('Marks a significant boundary in the SOM space where this feature undergoes notable change.\n')
+for feat_name, color_dict in isoline_colors.items():
+    if feat_name in input_columns:
+        feat_idx = input_columns.index(feat_name)
+        for isoline_val in color_dict.keys():
+            p.add_run(f'• {feat_name} = {isoline_val:.2f}: ')
+            p.add_run('Marks a significant boundary in the SOM space where this feature undergoes notable change.\n')
 
 p.add_run('\nPC1 Isolines (red dotted):\n')
 p.add_run('These isolines indicate where the first principal component contributes significantly, ')

@@ -185,26 +185,6 @@ for size in grid_sizes:
      # Calculate and store TE
     te = som.topographic_error(transformed_data)
     te_values.append(te)
-   
-
-# Plotting QE vs SOM size
-plt.plot(grid_sizes, qe_values, marker='o')
-plt.xlabel("SOM Grid Size")
-plt.ylabel("Quantization Error")
-plt.title("Quantization Error vs. SOM Size")
-plt.xticks(grid_sizes)
-plt.grid(True)
-#plt.show()
-
-
-# Plotting TE vs SOM size
-plt.plot(grid_sizes, te_values, marker='o')
-plt.xlabel("SOM Grid Size")
-plt.ylabel("Topographic Error")
-plt.title("Topographic Error vs SOM Size")
-plt.xticks(grid_sizes)
-plt.grid(True)
-#plt.show()
 
 #Printing QE and TE values
 
@@ -391,7 +371,7 @@ def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings)
     else:
         # The value of the weights will refer to the transformed data. If we want
         # the original scale, we will need to apply the inverse transform here
-        w = weights[:, :, feature_index].copy()
+        w = weights[:, :, feature_index]
 
     w_min = w.min()
     w_max = w.max()
@@ -513,7 +493,7 @@ for i, (row_index, col_index) in enumerate(subplot_ix[:len(input_columns)+1]):
         y = 1 - (row_index - 0.5) / subplot_rows,
         x = 0.38 if col_index == 1 else 0.90,
         tickfont=dict(size=18),
-        tickvals=[0.0, 0.5, 1.0],
+        tickvals=[0.0, 0.25, 0.5, 0.75, 1.0],
         tickformat=".1f",
     )
     add_som_features(features_fig, row_index, col_index, i, colorbar_settings)
@@ -534,7 +514,6 @@ for i, (row_index, col_index) in enumerate(subplot_ix):
 
 ## -------------------------------------------------------
     # Draw isolines for specific SOM planes
-    import matplotlib.pyplot as plt
 
     def add_isolines_to_som(fig, som_weights, coords, hexagons, feature_name, isoline_values, row, col):
         """
@@ -859,17 +838,13 @@ for cl in unique_labels:
     out_path = output_dir / f"myoutputSil_cluster_label_{int(cl)}.csv"
     sub_df.to_csv(out_path, index=False)
 
-    
+# Increase font size of numbers on colorbars
+for tr in features_fig.data:
+    if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
+        tr.marker.colorbar.update(tickfont=dict(size=18))
 
- # Increase font size of numbers on horizontal colorbars
-    for _fig in [locals().get('features_fig')]:
-        if _fig:
-            for tr in _fig.data:
-                if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
-                    tr.marker.colorbar.update(tickfont=dict(size=18))
-
-#Shows SOM planes with vertical scale bar
-show_figure(_fig)
+# Shows SOM planes with vertical scale bar
+# show_figure(features_fig)
 
 
 
@@ -1270,7 +1245,7 @@ for tr in fig_with_boundaries.data:
     if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
         tr.marker.colorbar.update(tickfont=dict(size=18))
 
-show_figure(fig_with_boundaries)
+# show_figure(fig_with_boundaries)
 
 # print("SOM planes with cluster boundaries displayed")
 # print("="*50 + "\n")
@@ -1352,7 +1327,7 @@ for tr in fig_with_boundaries_isolines.data:
     if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
         tr.marker.colorbar.update(tickfont=dict(size=18))
 
-show_figure(fig_with_boundaries_isolines)
+# show_figure(fig_with_boundaries_isolines)
 
 # print("SOM planes with cluster boundaries and isolines displayed")
 # print("="*50 + "\n")
@@ -2769,8 +2744,3 @@ for i, feature in enumerate(input_columns):
     print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
 
 print("="*50 + "\n")
-
-
-
-
-

@@ -150,3 +150,7 @@ Thumbs.db
 
 # Misc
 paper-draft/*.csv
+*.xlsx
+*.jpg
+*.csv
+*.html

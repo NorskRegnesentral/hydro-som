@@ -18,8 +18,6 @@ from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from IPython.display import Image
 from scipy.interpolate import griddata
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 # Parameters
@@ -68,6 +66,8 @@ plotly_interactive = True
 
 colorbar_tickvals = [0.0, 0.25, 0.5, 0.75, 1.0]
 colorbar_tickformat = ".2f"
+
+show_cluster_indexes = True
 
 # Isoline configuration  ─────────────────────────────────────────────────────
 # Background contour levels drawn per feature (normalised weight-space values)
@@ -560,7 +560,7 @@ def add_training_cells(fig: go.Figure, row, col, show_sum = True):
                 if show_sum:
                     text = f"{len(win_map[(i, j)])}"
                 else:
-                    if "Sample" in df.columns:
+                    if "Sample" in df.columns and not show_cluster_indexes:
                         names = df.iloc[win_map[(i, j)]]["Sample"]
                     else:
                         names = df.iloc[win_map[(i, j)]].index
@@ -1038,179 +1038,6 @@ for feature_name in features_to_save:
 # print("Creating Word Document with SOM Interpretation")
 # print("="*50)
 
-doc = Document()
-
-# Add title
-title = doc.add_heading('SOM Feature and Cluster Interpretation', 0)
-title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-# Add metadata section
-doc.add_heading('Analysis Metadata', level=1)
-p = doc.add_paragraph()
-p.add_run(f'Date of Analysis: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}\n').bold = True
-p.add_run(f'Number of Samples: {len(df)}\n')
-p.add_run(f'Number of Features: {len(input_columns)}\n')
-p.add_run(f'Features Analyzed: {", ".join(input_columns)}\n')
-p.add_run(f'SOM Dimensions: {final_nx} x {final_ny}\n')
-p.add_run(f'Number of Clusters: {int(selected_cluster["Number of clusters"])}\n')
-p.add_run(f'Quantization Error: {som.quantization_error(transformed_data):.4f}\n')
-p.add_run(f'Topographic Error: {som.topographic_error(transformed_data):.4f}\n')
-
-# PCA Summary
-doc.add_heading('PCA Summary', level=1)
-p = doc.add_paragraph()
-p.add_run(f'PC1 Explained Variance: {pca_full.explained_variance_ratio_[0]*100:.2f}%\n')
-p.add_run(f'PC2 Explained Variance: {pca_full.explained_variance_ratio_[1]*100:.2f}%\n')
-p.add_run(f'Total Variance Explained: {(pca_full.explained_variance_ratio_[0] + pca_full.explained_variance_ratio_[1])*100:.2f}%\n')
-
-# Feature Loadings
-doc.add_heading('Feature Loadings on Principal Components', level=2)
-table = doc.add_table(rows=1, cols=3)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Feature'
-hdr_cells[1].text = 'PC1 Loading'
-hdr_cells[2].text = 'PC2 Loading'
-
-for i, feature in enumerate(input_columns):
-    row_cells = table.add_row().cells
-    row_cells[0].text = feature
-    row_cells[1].text = f'{loadings[i, 0]:.4f}'
-    row_cells[2].text = f'{loadings[i, 1]:.4f}'
-
-# Feature Statistics
-doc.add_heading('Feature Statistics (SOM Weights)', level=1)
-table = doc.add_table(rows=1, cols=4)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Feature'
-hdr_cells[1].text = 'Mean Weight'
-hdr_cells[2].text = 'Variance'
-hdr_cells[3].text = 'Ward Distance'
-
-for feature_name in input_columns:
-    if feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
-        feat_idx = input_columns.index(feature_name)
-        feature_weights = weights_normalized[:, :, feat_idx].flatten()
-        feature_data = weights_normalized[:, :, feat_idx].reshape(-1)
-        feature_weights_2d = weights_normalized[:, :, feat_idx].reshape(-1, 1)
-        
-        mean_weight = feature_weights.mean()
-        variance = np.var(feature_data)
-        ward_linkage = hierarchy.linkage(feature_weights_2d, method='ward', metric='euclidean')
-        max_ward_distance = ward_linkage[:, 2].max()
-        
-        row_cells = table.add_row().cells
-        row_cells[0].text = feature_name
-        row_cells[1].text = f'{mean_weight:.4f}'
-        row_cells[2].text = f'{variance:.6f}'
-        row_cells[3].text = f'{max_ward_distance:.4f}'
-
-# Cluster Distribution
-doc.add_heading('Cluster Distribution', level=1)
-table = doc.add_table(rows=1, cols=2)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Cluster'
-hdr_cells[1].text = 'Number of Samples'
-
-for lab in sorted(df['cluster_label'].dropna().unique()):
-    count = len(df[df['cluster_label'] == lab])
-    row_cells = table.add_row().cells
-    row_cells[0].text = f'Cluster {int(lab)}'
-    row_cells[1].text = str(count)
-
-# Interpretation
-doc.add_heading('Interpretation of SOM Features and Clusters', level=1)
-
-doc.add_heading('1. PCA Biplot Analysis', level=2)
-p = doc.add_paragraph()
-p.add_run('The PCA biplot reveals the relationships between features and their contribution to sample variance:\n\n')
-
-# Analyze PC1 and PC2 dominant features
-pc1_loadings = [(input_columns[i], loadings[i, 0]) for i in range(len(input_columns))]
-pc2_loadings = [(input_columns[i], loadings[i, 1]) for i in range(len(input_columns))]
-pc1_loadings.sort(key=lambda x: abs(x[1]), reverse=True)
-pc2_loadings.sort(key=lambda x: abs(x[1]), reverse=True)
-
-p.add_run(f'• PC1 (dominant features): {", ".join([f[0] for f in pc1_loadings[:3]])}\n')
-p.add_run(f'• PC2 (dominant features): {", ".join([f[0] for f in pc2_loadings[:3]])}\n')
-p.add_run(f'\nFeatures with high positive PC1 loadings indicate variables that increase together along the first principal component. ')
-p.add_run(f'Features with high PC2 loadings represent the secondary pattern of variation orthogonal to PC1.\n')
-
-doc.add_heading('2. Correlation Analysis', level=2)
-if len(available_features) > 1:
-    p = doc.add_paragraph()
-    p.add_run('Key correlations between features:\n\n')
-    
-    # Find strong correlations
-    correlation_matrix = np.corrcoef(transformed_data[:, [input_columns.index(f) for f in available_features]].T)
-    for i in range(len(available_features)):
-        for j in range(i+1, len(available_features)):
-            corr_val = correlation_matrix[i, j]
-            if abs(corr_val) > 0.5:
-                p.add_run(f'• {available_features[i]} and {available_features[j]}: {corr_val:.3f}')
-                if corr_val > 0:
-                    p.add_run(' (positive correlation)\n')
-                else:
-                    p.add_run(' (negative correlation)\n')
-
-doc.add_heading('3. Isoline Analysis', level=2)
-p = doc.add_paragraph()
-p.add_run('Darkorange Isolines:\n')
-p.add_run('These critical isolines represent threshold values that separate distinct hydrochemical regimes:\n\n')
-
-for feat_name, color_dict in isoline_colors.items():
-    if feat_name in input_columns:
-        feat_idx = input_columns.index(feat_name)
-        for isoline_val in color_dict.keys():
-            p.add_run(f'• {feat_name} = {isoline_val:.2f}: ')
-            p.add_run('Marks a significant boundary in the SOM space where this feature undergoes notable change.\n')
-
-p.add_run('\nPC1 Isolines (red dotted):\n')
-p.add_run('These isolines indicate where the first principal component contributes significantly, ')
-p.add_run('representing transition zones between different dominant patterns in the data.\n')
-
-doc.add_heading('4. Cluster Interpretation', level=2)
-p = doc.add_paragraph()
-p.add_run('Based on the analysis, the clusters likely represent distinct hydrochemical facies:\n\n')
-
-for lab in sorted(df['cluster_label'].dropna().unique()):
-    cluster_df = df[df['cluster_label'] == lab]
-    p.add_run(f'Cluster {int(lab)} ({len(cluster_df)} samples):\n').bold = True
-    
-    # Calculate mean values for each feature in this cluster
-    cluster_means = {}
-    for col in input_columns:
-        if col in cluster_df.columns:
-            cluster_means[col] = cluster_df[col].mean()
-    
-    # Determine characteristic features
-    p.add_run(f'  Characterized by: ')
-    high_features = [f for f, v in cluster_means.items() if v > np.percentile(df[f], 66)]
-    low_features = [f for f, v in cluster_means.items() if v < np.percentile(df[f], 33)]
-    
-    if high_features:
-        p.add_run(f'High {", ".join(high_features[:3])}')
-    if low_features:
-        if high_features:
-            p.add_run('; ')
-        p.add_run(f'Low {", ".join(low_features[:3])}')
-    p.add_run('\n')
-    
-    # List samples
-    samples_list = cluster_df['Sample'].tolist()[:10]
-    p.add_run(f'  Example samples: {", ".join(map(str, samples_list))}')
-    if len(cluster_df) > 10:
-        p.add_run(f' ... and {len(cluster_df)-10} more')
-    p.add_run('\n\n')
-
-
-
-# # Print sum of weights and PC1 loadings for each feature
-# print("\n" + "="*50)
-# print("Sum of Weights and PC1 Loadings for Each Feature")
-# print("="*50)
 
 for feature_name in input_columns:
     feat_idx = input_columns.index(feature_name)

@@ -1,4 +1,5 @@
 import itertools
+import re
 from pathlib import Path
 
 import minisom
@@ -8,6 +9,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
 import shapely
+
+import plotly.colors as pc
 import matplotlib.pyplot as plt
 
 from plotly.colors import sample_colorscale, DEFAULT_PLOTLY_COLORS
@@ -18,12 +21,11 @@ from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from IPython.display import Image
 from scipy.interpolate import griddata
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 
 # Parameters
 
+# data_path = Path('H:\\Python\\Self_Org_Map\\As_Progr_for-Som\\A0_Es_Final_2\\a_data_Paper.csv')
 data_path = Path(__file__).parent / 'a_data_Paper.csv'
 input_columns = ['F4','F5','F7','F8','F9', 'pH_L']
 
@@ -67,6 +69,8 @@ plotly_interactive = True
 
 colorbar_tickvals = [0.0, 0.25, 0.5, 0.75, 1.0]
 colorbar_tickformat = ".2f"
+
+show_cluster_indexes = True
 
 # Isoline configuration  ─────────────────────────────────────────────────────
 # Background contour levels drawn per feature (normalised weight-space values)
@@ -384,8 +388,10 @@ print()
 if number_of_clusters is None:
     print(f"Number of clusters picked based on Silhouette     : {selected_cluster['Number of clusters']}")
     # print(f"Number of clusters picked based on DBI         : {selected_cluster['Number of clusters']}")
+    final_n_clusters = selected_cluster['Number of clusters']
 else:
     print(f"Number of clusters fixed to                    : {number_of_clusters}")
+    final_n_clusters = number_of_clusters
 
 # fig = px.line(cluster_df, x='Number of clusters', y='DBI', markers=True)
 # fig.layout.title = "Davies-Bouldin Index (lower is better)"
@@ -547,22 +553,22 @@ def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings)
     )
 
 
-def add_training_cells(fig: go.Figure, row, col):
+def add_training_cells(fig: go.Figure, row, col, show_sum = True):
     # Add colored hexagons
     label_colors = DEFAULT_PLOTLY_COLORS
     for i in range(final_nx):
         for j in range(final_ny):
             text = ""
             if len(win_map[(i, j)]) > 0:
-                samples = [str(s) for s in sorted(df.iloc[win_map[(i, j)]].index.values.tolist())]
-                if len(samples) <= 3:
-                    text = f"{','.join(samples)}"
-                elif len(samples) <= 6:
-                    text = f"{','.join(samples[:3])}" + f"<br>{','.join(samples[3:])}"
-                elif len(samples) <= 9:
-                    text = f"{','.join(samples[:3])}" + f"<br>{','.join(samples[3:6])}" + f"<br>{','.join(samples[6:])}"
+                if show_sum:
+                    text = f"{len(win_map[(i, j)])}"
                 else:
-                    text = f"{','.join(samples[:3])}" + f"<br>{','.join(samples[3:-3])}" + f"<br>{','.join(samples[-3:])}"
+                    if "Sample" in df.columns and not show_cluster_indexes:
+                        names = df.iloc[win_map[(i, j)]]["Sample"]
+                    else:
+                        names = df.iloc[win_map[(i, j)]].index
+                    samples = [str(s) for s in sorted(names.values.tolist())]
+                    text = f"{'<br>'.join(samples)}"
 
             fig.add_scatter(
                 x=hexagons[i, j, :, 0],
@@ -638,6 +644,19 @@ for i, (row_index, col_index) in enumerate(subplot_ix):
     sp.yaxis.scaleanchor = sp.yaxis.anchor
     sp.yaxis.showticklabels = False
     sp.xaxis.showticklabels = False
+
+## -------------------------------------------------------
+# Large cluster plot
+## -------------------------------------------------------
+
+large_cluster_fig = go.Figure()
+add_training_cells(large_cluster_fig, None, None, show_sum=False)
+add_cluster_boundaries(large_cluster_fig, None, None)
+large_cluster_fig.layout.yaxis.scaleanchor = "x"
+large_cluster_fig.layout.yaxis.showticklabels = False
+large_cluster_fig.layout.xaxis.showticklabels = False
+
+show_figure(large_cluster_fig)
 
 ## -------------------------------------------------------
 # Draw isolines for SOM feature planes
@@ -973,85 +992,12 @@ if write_neurons:
 
 # print("="*50 + "\n")
 
-# # Create biplot with loading vectors
-# print("\n" + "="*50)
-# print("PCA Biplot: Samples and Feature Loading Vectors")
-# print("="*50)
-
 # Perform PCA on the transformed data
 pca_full = PCA(n_components=2)
 pca_transformed = pca_full.fit_transform(transformed_data)
 
 # Get the loadings (principal components)
 loadings = pca_full.components_.T * np.sqrt(pca_full.explained_variance_)
-
-# Create the biplot
-fig_biplot = go.Figure()
-
-# Add scatter plot for samples
-fig_biplot.add_scatter(
-    x=pca_transformed[:, 0],
-    y=pca_transformed[:, 1],
-    mode='markers',
-    marker=dict(
-        size=10,
-        color=df['cluster_label'],
-        colorscale='Viridis',
-        showscale=True,
-        colorbar=dict(title="Cluster", x=1.15)
-    ),
-    text=df['Sample'],
-    name='Samples',
-    hovertemplate='<b>%{text}</b><br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>'
-)
-
-# Add loading vectors
-scale_factor = 3.5  # Adjust this to make vectors visible
-for i, feature in enumerate(input_columns):
-    fig_biplot.add_annotation(
-        ax=0.0, ay=0.0,
-        axref='x', ayref='y',
-        x=loadings[i, 0] * scale_factor,
-        y=loadings[i, 1] * scale_factor,
-        xref='x', yref='y',
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1,
-        arrowwidth=2,
-        arrowcolor='red',
-    )
-    
-    # Add feature labels at the end of vectors
-    fig_biplot.add_annotation(
-        x=loadings[i, 0] * scale_factor * 1.1,
-        y=loadings[i, 1] * scale_factor * 1.1,
-        xref='x', yref='y',
-        text=feature,
-        showarrow=False,
-        font=dict(size=12, color='red', family='Arial Black'),
-        bgcolor='rgba(255, 255, 255, 0.8)',
-        #bordercolor='red',
-        #borderwidth=1
-    )
-
-fig_biplot.update_layout(
-    title=f'PCA Biplot - Samples and Feature Loadings',
-    xaxis_title=f'PC1 ({pca_full.explained_variance_ratio_[0]*100:.1f}%)',
-    yaxis_title=f'PC2 ({pca_full.explained_variance_ratio_[1]*100:.1f}%)',
-    width=900,
-    height=700,
-    showlegend=True
-)
-
-#show_figure(fig_biplot)
-
-# # Print loading values
-# print("\nFeature Loadings on PC1 and PC2:")
-# print("-" * 40)
-# for i, feature in enumerate(input_columns):
-#     print(f"{feature:10s}: PC1={loadings[i, 0]:7.4f}, PC2={loadings[i, 1]:7.4f}")
-
-# print("="*50 + "\n")
 
 # # Save weight values for each neuron of specified features to separate Excel files
 # print("\n" + "="*50)
@@ -1087,142 +1033,6 @@ for feature_name in features_to_save:
 
 # print("="*50 + "\n")
 
-# # Plot boundaries between clusters on each SOM plane
-# print("\n" + "="*50)
-# print("Creating SOM Planes with Cluster Boundaries")
-# print("="*50)
-
-# Create a new figure with subplots for each feature + U-matrix + clusters
-n_plots_with_boundaries = len(input_columns) + 2
-subplot_rows_boundaries = (n_plots_with_boundaries + 1) // 2
-subplot_columns_boundaries = 2
-
-fig_with_boundaries = make_subplots(
-    rows=subplot_rows_boundaries,
-    cols=subplot_columns_boundaries,
-    subplot_titles=input_columns + ["U-Matrix"] + ["Clusters"],
-    horizontal_spacing=0.05,
-    vertical_spacing=0.05,
-)
-fig_with_boundaries.layout.height = 50 + 250 * subplot_rows_boundaries
-
-subplot_ix_boundaries = list(
-    itertools.product(range(1, subplot_rows_boundaries + 1), range(1, subplot_columns_boundaries + 1))
-)[:n_plots_with_boundaries]
-
-# Feature plots with cluster boundaries
-for i, (row_index, col_index) in enumerate(subplot_ix_boundaries[:len(input_columns)+1]):
-    colorbar_settings = dict(
-        thickness=20,
-        len=0.5 * (1 / subplot_rows_boundaries),
-        y=1 - (row_index - 0.5) / subplot_rows_boundaries,
-        x=0.38 if col_index == 1 else 0.90
-    )
-    add_som_features(fig_with_boundaries, row_index, col_index, i, colorbar_settings)
-    add_cluster_boundaries(fig_with_boundaries, row_index, col_index)
-
-# Add clusters plot
-add_training_cells(fig_with_boundaries, subplot_ix_boundaries[-1][0], subplot_ix_boundaries[-1][1])
-add_cluster_boundaries(fig_with_boundaries, subplot_ix_boundaries[-1][0], subplot_ix_boundaries[-1][1])
-
-# Update axes
-for i, (row_index, col_index) in enumerate(subplot_ix_boundaries):
-    sp = fig_with_boundaries.get_subplot(row_index, col_index)
-    sp.yaxis.scaleanchor = sp.yaxis.anchor
-    sp.yaxis.showticklabels = False
-    sp.xaxis.showticklabels = False
-
-# Update colorbar font size
-for tr in fig_with_boundaries.data:
-    if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
-        tr.marker.colorbar.update(tickfont=dict(size=18))
-
-# show_figure(fig_with_boundaries)
-
-# print("SOM planes with cluster boundaries displayed")
-# print("="*50 + "\n")
-
-
-# # Plot boundaries between clusters on each SOM plane with isolines
-# print("\n" + "="*50)
-# print("Creating SOM Planes with Cluster Boundaries and Isolines")
-# print("="*50)
-
-# Create a new figure with subplots for each feature + U-matrix + clusters
-n_plots_with_boundaries_isolines = len(input_columns) + 2
-subplot_rows_boundaries_isolines = (n_plots_with_boundaries_isolines + 1) // 2
-subplot_columns_boundaries_isolines = 2
-
-fig_with_boundaries_isolines = make_subplots(
-    rows=subplot_rows_boundaries_isolines,
-    cols=subplot_columns_boundaries_isolines,
-    subplot_titles=input_columns + ["U-Matrix"] + ["Clusters"],
-    horizontal_spacing=0.05,
-    vertical_spacing=0.05,
-)
-fig_with_boundaries_isolines.layout.height = 50 + 250 * subplot_rows_boundaries_isolines
-
-subplot_ix_boundaries_isolines = list(
-    itertools.product(range(1, subplot_rows_boundaries_isolines + 1), range(1, subplot_columns_boundaries_isolines + 1))
-)[:n_plots_with_boundaries_isolines]
-
-# Feature plots with cluster boundaries and isolines
-for i, (row_index, col_index) in enumerate(subplot_ix_boundaries_isolines[:len(input_columns)+1]):
-    colorbar_settings = dict(
-        thickness=20,
-        len=0.5 * (1 / subplot_rows_boundaries_isolines),
-        y=1 - (row_index - 0.5) / subplot_rows_boundaries_isolines,
-        x=0.38 if col_index == 1 else 0.90
-    )
-    add_som_features(fig_with_boundaries_isolines, row_index, col_index, i, colorbar_settings)
-    add_cluster_boundaries(fig_with_boundaries_isolines, row_index, col_index)
-    
-    # Add isolines for specific features
-    if i < len(input_columns):
-        feat_name = input_columns[i]
-        if feat_name in isoline_config:
-            add_isolines_to_som(
-                fig_with_boundaries_isolines,
-                weights_normalized[:, :, i],
-                (xx, yy),
-                feat_name,
-                isoline_config[feat_name],
-                row_index,
-                col_index,
-            )
-
-        # Add PC1 isolines
-        if feat_name in input_columns:
-            add_pc1_isolines(
-                fig_with_boundaries_isolines,
-                (xx, yy),
-                pc1_neuron_map,
-                pc1_isoline_value,
-                row_index,
-                col_index,
-            )
-
-# Add clusters plot
-add_training_cells(fig_with_boundaries_isolines, subplot_ix_boundaries_isolines[-1][0], subplot_ix_boundaries_isolines[-1][1])
-add_cluster_boundaries(fig_with_boundaries_isolines, subplot_ix_boundaries_isolines[-1][0], subplot_ix_boundaries_isolines[-1][1])
-
-# Update axes
-for i, (row_index, col_index) in enumerate(subplot_ix_boundaries_isolines):
-    sp = fig_with_boundaries_isolines.get_subplot(row_index, col_index)
-    sp.yaxis.scaleanchor = sp.yaxis.anchor
-    sp.yaxis.showticklabels = False
-    sp.xaxis.showticklabels = False
-
-# Update colorbar font size
-for tr in fig_with_boundaries_isolines.data:
-    if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
-        tr.marker.colorbar.update(tickfont=dict(size=18))
-
-# show_figure(fig_with_boundaries_isolines)
-
-# print("SOM planes with cluster boundaries and isolines displayed")
-# print("="*50 + "\n")
-
 
 #Write on the separate word dokument (save in the folder H:\Python\Self_Org_Map\As_Progr_for-Som\A0_Es_Final_2) intepretation of SOM featrures and clusters based on the above analysis. Consider also the PCA biplot and correlation matrix results. Consider cases of movement of the siolines with darkorange color and PC1 isolines. Discuss what the clusters might represent in terms of the original features.
 
@@ -1231,179 +1041,6 @@ for tr in fig_with_boundaries_isolines.data:
 # print("Creating Word Document with SOM Interpretation")
 # print("="*50)
 
-doc = Document()
-
-# Add title
-title = doc.add_heading('SOM Feature and Cluster Interpretation', 0)
-title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-# Add metadata section
-doc.add_heading('Analysis Metadata', level=1)
-p = doc.add_paragraph()
-p.add_run(f'Date of Analysis: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}\n').bold = True
-p.add_run(f'Number of Samples: {len(df)}\n')
-p.add_run(f'Number of Features: {len(input_columns)}\n')
-p.add_run(f'Features Analyzed: {", ".join(input_columns)}\n')
-p.add_run(f'SOM Dimensions: {final_nx} x {final_ny}\n')
-p.add_run(f'Number of Clusters: {int(selected_cluster["Number of clusters"])}\n')
-p.add_run(f'Quantization Error: {som.quantization_error(transformed_data):.4f}\n')
-p.add_run(f'Topographic Error: {som.topographic_error(transformed_data):.4f}\n')
-
-# PCA Summary
-doc.add_heading('PCA Summary', level=1)
-p = doc.add_paragraph()
-p.add_run(f'PC1 Explained Variance: {pca_full.explained_variance_ratio_[0]*100:.2f}%\n')
-p.add_run(f'PC2 Explained Variance: {pca_full.explained_variance_ratio_[1]*100:.2f}%\n')
-p.add_run(f'Total Variance Explained: {(pca_full.explained_variance_ratio_[0] + pca_full.explained_variance_ratio_[1])*100:.2f}%\n')
-
-# Feature Loadings
-doc.add_heading('Feature Loadings on Principal Components', level=2)
-table = doc.add_table(rows=1, cols=3)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Feature'
-hdr_cells[1].text = 'PC1 Loading'
-hdr_cells[2].text = 'PC2 Loading'
-
-for i, feature in enumerate(input_columns):
-    row_cells = table.add_row().cells
-    row_cells[0].text = feature
-    row_cells[1].text = f'{loadings[i, 0]:.4f}'
-    row_cells[2].text = f'{loadings[i, 1]:.4f}'
-
-# Feature Statistics
-doc.add_heading('Feature Statistics (SOM Weights)', level=1)
-table = doc.add_table(rows=1, cols=4)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Feature'
-hdr_cells[1].text = 'Mean Weight'
-hdr_cells[2].text = 'Variance'
-hdr_cells[3].text = 'Ward Distance'
-
-for feature_name in input_columns:
-    if feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
-        feat_idx = input_columns.index(feature_name)
-        feature_weights = weights_normalized[:, :, feat_idx].flatten()
-        feature_data = weights_normalized[:, :, feat_idx].reshape(-1)
-        feature_weights_2d = weights_normalized[:, :, feat_idx].reshape(-1, 1)
-        
-        mean_weight = feature_weights.mean()
-        variance = np.var(feature_data)
-        ward_linkage = hierarchy.linkage(feature_weights_2d, method='ward', metric='euclidean')
-        max_ward_distance = ward_linkage[:, 2].max()
-        
-        row_cells = table.add_row().cells
-        row_cells[0].text = feature_name
-        row_cells[1].text = f'{mean_weight:.4f}'
-        row_cells[2].text = f'{variance:.6f}'
-        row_cells[3].text = f'{max_ward_distance:.4f}'
-
-# Cluster Distribution
-doc.add_heading('Cluster Distribution', level=1)
-table = doc.add_table(rows=1, cols=2)
-table.style = 'Light Grid Accent 1'
-hdr_cells = table.rows[0].cells
-hdr_cells[0].text = 'Cluster'
-hdr_cells[1].text = 'Number of Samples'
-
-for lab in sorted(df['cluster_label'].dropna().unique()):
-    count = len(df[df['cluster_label'] == lab])
-    row_cells = table.add_row().cells
-    row_cells[0].text = f'Cluster {int(lab)}'
-    row_cells[1].text = str(count)
-
-# Interpretation
-doc.add_heading('Interpretation of SOM Features and Clusters', level=1)
-
-doc.add_heading('1. PCA Biplot Analysis', level=2)
-p = doc.add_paragraph()
-p.add_run('The PCA biplot reveals the relationships between features and their contribution to sample variance:\n\n')
-
-# Analyze PC1 and PC2 dominant features
-pc1_loadings = [(input_columns[i], loadings[i, 0]) for i in range(len(input_columns))]
-pc2_loadings = [(input_columns[i], loadings[i, 1]) for i in range(len(input_columns))]
-pc1_loadings.sort(key=lambda x: abs(x[1]), reverse=True)
-pc2_loadings.sort(key=lambda x: abs(x[1]), reverse=True)
-
-p.add_run(f'• PC1 (dominant features): {", ".join([f[0] for f in pc1_loadings[:3]])}\n')
-p.add_run(f'• PC2 (dominant features): {", ".join([f[0] for f in pc2_loadings[:3]])}\n')
-p.add_run(f'\nFeatures with high positive PC1 loadings indicate variables that increase together along the first principal component. ')
-p.add_run(f'Features with high PC2 loadings represent the secondary pattern of variation orthogonal to PC1.\n')
-
-doc.add_heading('2. Correlation Analysis', level=2)
-if len(available_features) > 1:
-    p = doc.add_paragraph()
-    p.add_run('Key correlations between features:\n\n')
-    
-    # Find strong correlations
-    correlation_matrix = np.corrcoef(transformed_data[:, [input_columns.index(f) for f in available_features]].T)
-    for i in range(len(available_features)):
-        for j in range(i+1, len(available_features)):
-            corr_val = correlation_matrix[i, j]
-            if abs(corr_val) > 0.5:
-                p.add_run(f'• {available_features[i]} and {available_features[j]}: {corr_val:.3f}')
-                if corr_val > 0:
-                    p.add_run(' (positive correlation)\n')
-                else:
-                    p.add_run(' (negative correlation)\n')
-
-doc.add_heading('3. Isoline Analysis', level=2)
-p = doc.add_paragraph()
-p.add_run('Darkorange Isolines:\n')
-p.add_run('These critical isolines represent threshold values that separate distinct hydrochemical regimes:\n\n')
-
-for feat_name, color_dict in isoline_colors.items():
-    if feat_name in input_columns:
-        feat_idx = input_columns.index(feat_name)
-        for isoline_val in color_dict.keys():
-            p.add_run(f'• {feat_name} = {isoline_val:.2f}: ')
-            p.add_run('Marks a significant boundary in the SOM space where this feature undergoes notable change.\n')
-
-p.add_run('\nPC1 Isolines (red dotted):\n')
-p.add_run('These isolines indicate where the first principal component contributes significantly, ')
-p.add_run('representing transition zones between different dominant patterns in the data.\n')
-
-doc.add_heading('4. Cluster Interpretation', level=2)
-p = doc.add_paragraph()
-p.add_run('Based on the analysis, the clusters likely represent distinct hydrochemical facies:\n\n')
-
-for lab in sorted(df['cluster_label'].dropna().unique()):
-    cluster_df = df[df['cluster_label'] == lab]
-    p.add_run(f'Cluster {int(lab)} ({len(cluster_df)} samples):\n').bold = True
-    
-    # Calculate mean values for each feature in this cluster
-    cluster_means = {}
-    for col in input_columns:
-        if col in cluster_df.columns:
-            cluster_means[col] = cluster_df[col].mean()
-    
-    # Determine characteristic features
-    p.add_run(f'  Characterized by: ')
-    high_features = [f for f, v in cluster_means.items() if v > np.percentile(df[f], 66)]
-    low_features = [f for f, v in cluster_means.items() if v < np.percentile(df[f], 33)]
-    
-    if high_features:
-        p.add_run(f'High {", ".join(high_features[:3])}')
-    if low_features:
-        if high_features:
-            p.add_run('; ')
-        p.add_run(f'Low {", ".join(low_features[:3])}')
-    p.add_run('\n')
-    
-    # List samples
-    samples_list = cluster_df['Sample'].tolist()[:10]
-    p.add_run(f'  Example samples: {", ".join(map(str, samples_list))}')
-    if len(cluster_df) > 10:
-        p.add_run(f' ... and {len(cluster_df)-10} more')
-    p.add_run('\n\n')
-
-
-
-# # Print sum of weights and PC1 loadings for each feature
-# print("\n" + "="*50)
-# print("Sum of Weights and PC1 Loadings for Each Feature")
-# print("="*50)
 
 for feature_name in input_columns:
     feat_idx = input_columns.index(feature_name)
@@ -1421,169 +1058,6 @@ for feature_name in input_columns:
 
 # print("="*50 + "\n")
 
-
-
-# Create enhanced biplot with improved visualization
-print("\n" + "="*50)
-print("Creating Enhanced PCA Biplot")
-print("="*50)
-
-# Perform PCA on the transformed data (already done above, but ensure it's available)
-pca_biplot = PCA(n_components=2)
-pca_scores = pca_biplot.fit_transform(transformed_data)
-
-# Get the loadings (principal components)
-loadings_biplot = pca_biplot.components_.T * np.sqrt(pca_biplot.explained_variance_)
-
-# Create the enhanced biplot
-fig_biplot_enhanced = go.Figure()
-
-# Add scatter plot for samples with cluster colors
-cluster_colors = df['cluster_label'].values
-unique_clusters = sorted(df['cluster_label'].dropna().unique())
-
-for cluster_id in unique_clusters:
-    cluster_mask = df['cluster_label'] == cluster_id
-    cluster_samples = df[cluster_mask]
-    
-    fig_biplot_enhanced.add_scatter(
-        x=pca_scores[cluster_mask, 0],
-        y=pca_scores[cluster_mask, 1],
-        mode='markers',
-        marker=dict(
-            size=10,
-            color=DEFAULT_PLOTLY_COLORS[int(cluster_id) % len(DEFAULT_PLOTLY_COLORS)],
-            line=dict(width=1, color='white'),
-            opacity=0.8
-        ),
-        text=cluster_samples['Sample'],
-        name=f'Cluster {int(cluster_id)}',
-        hovertemplate='<b>%{text}</b><br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>'
-    )
-
-# Add loading vectors with enhanced styling
-scale_factor = 4.0  # Adjust for better visibility
-arrow_colors = px.colors.qualitative.Set2
-
-for i, feature in enumerate(input_columns):
-    # Calculate arrow position
-    arrow_x = loadings_biplot[i, 0] * scale_factor
-    arrow_y = loadings_biplot[i, 1] * scale_factor
-    
-    # Add arrow as a line with annotation
-    fig_biplot_enhanced.add_trace(go.Scatter(
-        x=[0, arrow_x],
-        y=[0, arrow_y],
-        mode='lines',
-        line=dict(
-            color=arrow_colors[i % len(arrow_colors)],
-            width=3
-        ),
-        showlegend=False,
-        hoverinfo='skip'
-    ))
-    
-    # Add arrowhead
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x,
-        y=arrow_y,
-        ax=0.0,
-        ay=0.0,
-        xref='x',
-        yref='y',
-        axref='x',
-        ayref='y',
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1.5,
-        arrowwidth=2,
-        #arrowcolor=arrow_colors[i % len(arrow_colors)],
-        arrowcolor='darkblue',
-    )
-    
-    # Add feature labels with better positioning
-    label_offset = 1.05
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x * label_offset,
-        y=arrow_y * label_offset,
-        text=f'<b>{feature}</b>',
-        showarrow=False,
-        font=dict(
-            size=16,
-            color=arrow_colors[i % len(arrow_colors)],
-            family='Arial Black'
-        ),
-        # bgcolor='rgba(255, 255, 255, 0.85)',
-        # bordercolor=arrow_colors[i % len(arrow_colors)],
-        # borderwidth=2,
-        # borderpad=4
-    )
-
-# Add grid lines at origin
-fig_biplot_enhanced.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-fig_biplot_enhanced.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-# Update layout with enhanced styling
-fig_biplot_enhanced.update_layout(
-    title=dict(
-        text=f'<b>PCA Biplot - Samples and Feature Loadings</b><br>' +
-             f'<sub>Variance Explained: PC1={pca_biplot.explained_variance_ratio_[0]*100:.1f}%, ' +
-             f'PC2={pca_biplot.explained_variance_ratio_[1]*100:.1f}%</sub>',
-        x=0.5,
-        xanchor='center',
-        font=dict(size=16)
-    ),
-    xaxis_title=f'<b>PC1 ({pca_biplot.explained_variance_ratio_[0]*100:.1f}%)</b>',
-    yaxis_title=f'<b>PC2 ({pca_biplot.explained_variance_ratio_[1]*100:.1f}%)</b>',
-    width=1000,
-    height=800,
-    showlegend=True,
-    legend=dict(
-        title=dict(text='<b>Clusters</b>'),
-        orientation='v',
-        x=1.02,
-        y=1.0,
-        bgcolor='rgba(255, 255, 255, 0.8)',
-        bordercolor='black',
-        borderwidth=1
-    ),
-    plot_bgcolor='rgba(245, 245, 245, 0.5)',
-    xaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black'
-    ),
-    yaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        scaleanchor='x',
-        scaleratio=1
-    ),
-    font=dict(size=14)
-)
-
-# Save the biplot figure
-fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
-print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
-
-
-#show_figure(fig_biplot_enhanced)
-
-# Print loading values in a formatted table
-print("\nFeature Loadings on PC1 and PC2:")
-print("-" * 50)
-print(f"{'Feature':<12} {'PC1 Loading':>12} {'PC2 Loading':>12} {'Vector Length':>14}")
-print("-" * 50)
-for i, feature in enumerate(input_columns):
-    vector_length = np.sqrt(loadings_biplot[i, 0]**2 + loadings_biplot[i, 1]**2)
-    print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
-
-print("="*50 + "\n")
 
 
 # # Calculate PC2 isoline value (mean across all neurons)
@@ -1685,43 +1159,6 @@ print(f"PC2 isolines added to all feature plots")
 print(f"PC2 Isoline Value: {pc2_isoline_value:.6f}")
 print("="*50 + "\n")
 
-# Also add PC2 isolines to the enhanced figures (with boundaries and with boundaries+isolines)
-if 'fig_with_boundaries' in locals():
-    for feat_name in pc2_features:
-        if feat_name in input_columns:
-            feat_idx = input_columns.index(feat_name)
-            plot_position = feat_idx
-            row_idx = subplot_ix_boundaries[plot_position][0]
-            col_idx = subplot_ix_boundaries[plot_position][1]
-            
-            add_pc2_isolines(
-                fig_with_boundaries,
-                (xx, yy),
-                hexagons,
-                feat_name,
-                row_idx,
-                col_idx
-            )
-    print("PC2 isolines added to boundaries figure")
-
-if 'fig_with_boundaries_isolines' in locals():
-    for feat_name in pc2_features:
-        if feat_name in input_columns:
-            feat_idx = input_columns.index(feat_name)
-            plot_position = feat_idx
-            row_idx = subplot_ix_boundaries_isolines[plot_position][0]
-            col_idx = subplot_ix_boundaries_isolines[plot_position][1]
-            
-            add_pc2_isolines(
-                fig_with_boundaries_isolines,
-                (xx, yy),
-                hexagons,
-                feat_name,
-                row_idx,
-                col_idx
-            )
-    print("PC2 isolines added to boundaries+isolines figure")
-
 print("="*50 + "\n")
 
 # Display updated figures
@@ -1730,710 +1167,6 @@ show_figure(features_fig)
 
 
 
-# Create a single SOM plane with all isolines (excluding green dash isolines)
-print("\n" + "="*50)
-print("Creating Single SOM Plane with All Isolines")
-print("="*50)
-
-# Create a new figure for single plane with isolines
-fig_single_isolines = go.Figure()
-
-# Add hexagons with light background (using U-matrix or a neutral colorscale)
-# Using a very light color scheme
-for i in range(final_nx):
-    for j in range(final_ny):
-        fig_single_isolines.add_scatter(
-            x=hexagons[i, j, :, 0],
-            y=hexagons[i, j, :, 1],
-            fill='toself',
-            mode='lines',
-            fillcolor='rgba(240, 240, 240, 0.5)',  # Light gray background
-            line=dict(color='lightgray', width=0.5),
-            showlegend=False,
-            hoverinfo='skip',
-        )
-
-# Add cluster boundaries
-for k, boundary in cluster_boundaries.items():
-    if boundary.geom_type == 'Polygon':
-        bnds = [boundary]
-    elif boundary.geom_type == 'MultiPolygon':
-        bnds = list(boundary.geoms)
-    else:
-        raise NotImplementedError(boundary.geom_type)
-    
-    for poly in bnds:
-        if poly.boundary.geom_type == 'LineString':
-            crds = np.array(poly.boundary.coords)
-        else:
-            crds = np.array(poly.boundary.geoms[0].coords)
-
-        fig_single_isolines.add_scatter(
-            x=crds[:, 0],
-            y=crds[:, 1],
-            mode="lines",
-            showlegend=False,
-            line=dict(color='black', width=2),
-        )
-
-# Add colored isolines (darkorange solid lines)
-for feat_name, color_dict in isoline_colors.items():
-    if feat_name in input_columns:
-        feat_idx = input_columns.index(feat_name)
-        som_weights = weights_normalized[:, :, feat_idx]
-        
-        points = np.column_stack([xx.flatten(), yy.flatten()])
-        values = som_weights.flatten()
-        
-        grid_x = np.linspace(xx.min(), xx.max(), 100)
-        grid_y = np.linspace(yy.min(), yy.max(), 100)
-        grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-        
-        grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-        
-        for isoline_val, color in color_dict.items():
-            fig_temp = plt.figure()
-            ax_temp = fig_temp.add_subplot(111)
-            contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[isoline_val], colors='black', linewidths=3.0)
-            plt.close(fig_temp)
-            
-            line_style = 'solid'
-            if feat_name in isoline_styles and isoline_val in isoline_styles[feat_name]:
-                line_style = isoline_styles[feat_name][isoline_val]
-            
-            for level_idx in range(len(contours.levels)):
-                paths = contours.allsegs[level_idx]
-                for path in paths:
-                    fig_single_isolines.add_scatter(
-                        x=path[:, 0],
-                        y=path[:, 1],
-                        mode='lines',
-                        line=dict(color=color, width=4.0, dash=line_style),
-                        showlegend=False,
-                        hoverinfo='skip',
-                        name=f'{feat_name}={isoline_val:.2f}'
-                    )
-
-# Add PC1 isolines (red dotted)
-points = np.column_stack([xx.flatten(), yy.flatten()])
-values = pc1_neuron_map.flatten()
-
-grid_x = np.linspace(xx.min(), xx.max(), 100)
-grid_y = np.linspace(yy.min(), yy.max(), 100)
-grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-
-grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-
-fig_temp = plt.figure()
-ax_temp = fig_temp.add_subplot(111)
-contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc1_isoline_value], colors='black', linewidths=2)
-plt.close(fig_temp)
-
-if len(contours.allsegs) > 0:
-    for path in contours.allsegs[0]:
-        fig_single_isolines.add_scatter(
-            x=path[:, 0],
-            y=path[:, 1],
-            mode='lines',
-            line=dict(color='red', width=4.5, dash='dot'),
-            showlegend=False,
-            hoverinfo='skip',
-            name='PC1 Isoline'
-        )
-
-# Add PC2 isolines (blue dotted)
-values = pc2_neuron_map.flatten()
-grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-
-fig_temp = plt.figure()
-ax_temp = fig_temp.add_subplot(111)
-contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc2_isoline_value], colors='black', linewidths=2)
-plt.close(fig_temp)
-
-if len(contours.allsegs) > 0:
-    for path in contours.allsegs[0]:
-        fig_single_isolines.add_scatter(
-            x=path[:, 0],
-            y=path[:, 1],
-            mode='lines',
-            line=dict(color='darkblue', width=4.5, dash='dot'),
-            showlegend=False,
-            hoverinfo='skip',
-            name='PC2 Isoline'
-        )
-
-# Update layout
-fig_single_isolines.update_layout(
-    title='SOM Plane with All Isolines (Excluding Green Dash Lines)',
-    xaxis=dict(showticklabels=False, showgrid=False),
-    yaxis=dict(showticklabels=False, showgrid=False, scaleanchor='x'),
-    width=800,
-    height=800,
-    plot_bgcolor='white',
-    showlegend=False
-)
-
-# Save and display
-fig_single_isolines.write_html('SOM_Single_Plane_All_Isolines.html')
-print("Single SOM plane with all isolines saved to 'SOM_Single_Plane_All_Isolines.html'")
-#show_figure(fig_single_isolines)
-
-print("="*50 + "\n")
-
-
-# Create enhanced biplot with improved visualization
-print("\n" + "="*50)
-print("Creating Enhanced PCA Biplot")
-print("="*50)
-
-# Perform PCA on the transformed data (already done above, but ensure it's available)
-pca_biplot = PCA(n_components=2)
-pca_scores = pca_biplot.fit_transform(transformed_data)
-
-# Get the loadings (principal components)
-loadings_biplot = pca_biplot.components_.T * np.sqrt(pca_biplot.explained_variance_)
-
-# Create the enhanced biplot
-fig_biplot_enhanced = go.Figure()
-
-# Add scatter plot for samples with cluster colors
-cluster_colors = df['cluster_label'].values
-unique_clusters = sorted(df['cluster_label'].dropna().unique())
-
-for cluster_id in unique_clusters:
-    cluster_mask = df['cluster_label'] == cluster_id
-    cluster_samples = df[cluster_mask]
-    
-    fig_biplot_enhanced.add_scatter(
-        x=pca_scores[cluster_mask, 0],
-        y=pca_scores[cluster_mask, 1],
-        mode='markers',
-        marker=dict(
-            size=10,
-            color=DEFAULT_PLOTLY_COLORS[int(cluster_id) % len(DEFAULT_PLOTLY_COLORS)],
-            line=dict(width=1, color='white'),
-            opacity=0.8
-        ),
-        text=cluster_samples['Sample'],
-        name=f'Cluster {int(cluster_id)}',
-        hovertemplate='<b>%{text}</b><br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>'
-    )
-
-# Add loading vectors with enhanced styling
-scale_factor = 4.0  # Adjust for better visibility
-
-# Mapping of original feature names to display names
-feature_display_names = {
-    'F4': 'f1',
-    'F5': 'f2',
-    'F7': 'f3',
-    'F8': 'f4',
-    'F9': 'f5'
-}
-
-for i, feature in enumerate(input_columns):
-    # Calculate arrow position
-    arrow_x = loadings_biplot[i, 0] * scale_factor
-    arrow_y = loadings_biplot[i, 1] * scale_factor
-    
-    # Add arrow as a line with annotation
-    fig_biplot_enhanced.add_trace(go.Scatter(
-        x=[0, arrow_x],
-        y=[0, arrow_y],
-        mode='lines',
-        line=dict(
-            color='black',
-            width=3
-        ),
-        showlegend=False,
-        hoverinfo='skip'
-    ))
-    
-    # Add arrowhead
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x,
-        y=arrow_y,
-        ax=0.0,
-        ay=0.0,
-        xref='x',
-        yref='y',
-        axref='x',
-        ayref='y',
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1.5,
-        arrowwidth=2,
-        arrowcolor='black',
-    )
-    
-    # Add feature labels with better positioning
-    label_offset = 1.05
-    # Use display name if available, otherwise use original name
-    display_name = feature_display_names.get(feature, feature)
-    
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x * label_offset,
-        y=arrow_y * label_offset,
-        text=f'<b>{display_name}</b>',
-        showarrow=False,
-        font=dict(
-            size=16,
-            color='black',
-            family='Arial Black'
-        ),
-    )
-
-# Add grid lines at origin
-fig_biplot_enhanced.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-fig_biplot_enhanced.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-# Update layout with enhanced styling
-fig_biplot_enhanced.update_layout(
-    title=dict(
-        text=f'<b>PCA Biplot - Samples and Feature Loadings</b><br>' +
-             f'<sub>Variance Explained: PC1={pca_biplot.explained_variance_ratio_[0]*100:.1f}%, ' +
-             f'PC2={pca_biplot.explained_variance_ratio_[1]*100:.1f}%</sub>',
-        x=0.5,
-        xanchor='center',
-        font=dict(size=16)
-    ),
-    xaxis_title=f'<b>PC1 ({pca_biplot.explained_variance_ratio_[0]*100:.1f}%)</b>',
-    yaxis_title=f'<b>PC2 ({pca_biplot.explained_variance_ratio_[1]*100:.1f}%)</b>',
-    width=1000,
-    height=800,
-    showlegend=True,
-    legend=dict(
-        title=dict(text='<b>Clusters</b>'),
-        orientation='v',
-        x=1.02,
-        y=1.0,
-        bgcolor='rgba(255, 255, 255, 0.8)',
-        bordercolor='black',
-        borderwidth=1
-    ),
-    plot_bgcolor='rgba(245, 245, 245, 0.5)',
-    xaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black'
-    ),
-    yaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        scaleanchor='x',
-        scaleratio=1
-    ),
-    font=dict(size=14)
-)
-
-# Save the biplot figure
-fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
-print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
-
-
-#show_figure(fig_biplot_enhanced)
-
-# Print loading values in a formatted table
-print("\nFeature Loadings on PC1 and PC2:")
-print("-" * 50)
-print(f"{'Feature':<12} {'PC1 Loading':>12} {'PC2 Loading':>12} {'Vector Length':>14}")
-print("-" * 50)
-for i, feature in enumerate(input_columns):
-    vector_length = np.sqrt(loadings_biplot[i, 0]**2 + loadings_biplot[i, 1]**2)
-    print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
-
-print("="*50 + "\n")
-
-# Create enhanced biplot with improved visualization
-print("\n" + "="*50)
-print("Creating Enhanced PCA Biplot")
-print("="*50)
-
-# Perform PCA on the transformed data (already done above, but ensure it's available)
-pca_biplot = PCA(n_components=2)
-pca_scores = pca_biplot.fit_transform(transformed_data)
-
-# Get the loadings (principal components)
-loadings_biplot = pca_biplot.components_.T * np.sqrt(pca_biplot.explained_variance_)
-
-# Create the enhanced biplot
-fig_biplot_enhanced = go.Figure()
-
-# Add scatter plot for samples with cluster colors
-cluster_colors = df['cluster_label'].values
-unique_clusters = sorted(df['cluster_label'].dropna().unique())
-
-for cluster_id in unique_clusters:
-    cluster_mask = df['cluster_label'] == cluster_id
-    cluster_samples = df[cluster_mask]
-    
-    # Get base color and create darker border
-    base_color = DEFAULT_PLOTLY_COLORS[int(cluster_id) % len(DEFAULT_PLOTLY_COLORS)]
-    # Convert to darker shade for border
-    import plotly.colors as pc
-    import re
-    
-    # Parse RGB color string if it's in rgb() format, otherwise convert from hex
-    if base_color.startswith('rgb'):
-        rgb_match = re.findall(r'\d+', base_color)
-        rgb = tuple(int(x) for x in rgb_match[:3])
-    else:
-        rgb = pc.hex_to_rgb(base_color)
-    
-    darker_rgb = tuple(int(c * 0.6) for c in rgb)  # 40% darker
-    darker_color = f'rgb({darker_rgb[0]},{darker_rgb[1]},{darker_rgb[2]})'
-    
-    fig_biplot_enhanced.add_scatter(
-        x=pca_scores[cluster_mask, 0],
-        y=pca_scores[cluster_mask, 1],
-        mode='markers',
-        marker=dict(
-            size=10,
-            color=base_color,
-            line=dict(width=2, color=darker_color),
-            opacity=0.8
-        ),
-        text=cluster_samples['Sample'],
-        name=f'Cluster {int(cluster_id)}',
-        hovertemplate='<b>%{text}</b><br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>'
-    )
-
-# Add loading vectors with enhanced styling
-scale_factor = 4.0  # Adjust for better visibility
-
-# Mapping of original feature names to display names
-feature_display_names = {
-    'F4': 'f1',
-    'F5': 'f2',
-    'F7': 'f3',
-    'F8': 'f4',
-    'F9': 'f5'
-}
-
-for i, feature in enumerate(input_columns):
-    # Calculate arrow position
-    arrow_x = loadings_biplot[i, 0] * scale_factor
-    arrow_y = loadings_biplot[i, 1] * scale_factor
-    
-    # Add arrow as a line with annotation
-    fig_biplot_enhanced.add_trace(go.Scatter(
-        x=[0, arrow_x],
-        y=[0, arrow_y],
-        mode='lines',
-        line=dict(
-            color='black',
-            width=1.5
-        ),
-        showlegend=False,
-        hoverinfo='skip'
-    ))
-    
-    # Add arrowhead
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x,
-        y=arrow_y,
-        ax=0.0,
-        ay=0.0,
-        xref='x',
-        yref='y',
-        axref='x',
-        ayref='y',
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1.5,
-        arrowwidth=1.5,
-        arrowcolor='black',
-    )
-    
-    # Add feature labels with better positioning
-    label_offset = 1.05
-    # Use display name if available, otherwise use original name
-    display_name = feature_display_names.get(feature, feature)
-    
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x * label_offset,
-        y=arrow_y * label_offset,
-        text=f'<b>{display_name}</b>',
-        showarrow=False,
-        font=dict(
-            size=16,
-            color='black',
-            family='Arial Black'
-        ),
-    )
-
-# Add grid lines at origin
-fig_biplot_enhanced.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-fig_biplot_enhanced.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-# Update layout with enhanced styling
-fig_biplot_enhanced.update_layout(
-    title=dict(
-        text=f'<b>PCA Biplot - Samples and Feature Loadings</b><br>' +
-             f'<sub>Variance Explained: PC1={pca_biplot.explained_variance_ratio_[0]*100:.1f}%, ' +
-             f'PC2={pca_biplot.explained_variance_ratio_[1]*100:.1f}%</sub>',
-        x=0.5,
-        xanchor='center',
-        font=dict(size=16)
-    ),
-    xaxis_title=f'<b>PC1 ({pca_biplot.explained_variance_ratio_[0]*100:.1f}%)</b>',
-    yaxis_title=f'<b>PC2 ({pca_biplot.explained_variance_ratio_[1]*100:.1f}%)</b>',
-    width=1000,
-    height=800,
-    showlegend=True,
-    legend=dict(
-        title=dict(text='<b>Clusters</b>'),
-        orientation='v',
-        x=1.02,
-        y=1.0,
-        bgcolor='rgba(255, 255, 255, 0.8)',
-        bordercolor='black',
-        borderwidth=1
-    ),
-    plot_bgcolor='rgba(245, 245, 245, 0.5)',
-    xaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        range=[-1, 1],
-        tickfont=dict(size=16)
-    ),
-    yaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        scaleanchor='x',
-        scaleratio=1,
-        range=[-1, 1],
-        tickfont=dict(size=16)
-    ),
-    font=dict(size=14)
-)
-
-# Save the biplot figure
-fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
-print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
-
-
-#show_figure(fig_biplot_enhanced)
-
-# Print loading values in a formatted table
-print("\nFeature Loadings on PC1 and PC2:")
-print("-" * 50)
-print(f"{'Feature':<12} {'PC1 Loading':>12} {'PC2 Loading':>12} {'Vector Length':>14}")
-print("-" * 50)
-for i, feature in enumerate(input_columns):
-    vector_length = np.sqrt(loadings_biplot[i, 0]**2 + loadings_biplot[i, 1]**2)
-    print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
-
-print("="*50 + "\n")
-
-
-# Create enhanced biplot with improved visualization
-print("\n" + "="*50)
-print("Creating Enhanced PCA Biplot")
-print("="*50)
-
-# Perform PCA on the transformed data (already done above, but ensure it's available)
-pca_biplot = PCA(n_components=2)
-pca_scores = pca_biplot.fit_transform(transformed_data)
-
-# Get the loadings (principal components)
-loadings_biplot = pca_biplot.components_.T * np.sqrt(pca_biplot.explained_variance_)
-
-# Create the enhanced biplot
-fig_biplot_enhanced = go.Figure()
-
-# Add scatter plot for samples with cluster colors
-cluster_colors = df['cluster_label'].values
-unique_clusters = sorted(df['cluster_label'].dropna().unique())
-
-for cluster_id in unique_clusters:
-    cluster_mask = df['cluster_label'] == cluster_id
-    cluster_samples = df[cluster_mask]
-    
-    # Get base color and create darker border
-    base_color = DEFAULT_PLOTLY_COLORS[int(cluster_id) % len(DEFAULT_PLOTLY_COLORS)]
-    # Convert to darker shade for border
-    import plotly.colors as pc
-    
-    # Parse RGB color string if it's in rgb() format, otherwise convert from hex
-    if base_color.startswith('rgb'):
-        rgb_match = re.findall(r'\d+', base_color)
-        rgb = tuple(int(x) for x in rgb_match[:3])
-    else:
-        rgb = pc.hex_to_rgb(base_color)
-    
-    darker_rgb = tuple(int(c * 0.6) for c in rgb)  # 40% darker
-    darker_color = f'rgb({darker_rgb[0]},{darker_rgb[1]},{darker_rgb[2]})'
-    
-    fig_biplot_enhanced.add_scatter(
-        x=pca_scores[cluster_mask, 0],
-        y=pca_scores[cluster_mask, 1],
-        mode='markers',
-        marker=dict(
-            size=10,
-            color=base_color,
-            line=dict(width=2, color=darker_color),
-            opacity=0.8
-        ),
-        text=cluster_samples['Sample'],
-        name=f'Cluster {int(cluster_id)}',
-        hovertemplate='<b>%{text}</b><br>PC1: %{x:.3f}<br>PC2: %{y:.3f}<extra></extra>'
-    )
-
-# Add loading vectors with enhanced styling
-scale_factor = 4.0  # Adjust for better visibility
-
-# Mapping of original feature names to display names
-feature_display_names = {
-    'F4': 'f1',
-    'F5': 'f2',
-    'F7': 'f3',
-    'F8': 'f4',
-    'F9': 'f5'
-}
-
-for i, feature in enumerate(input_columns):
-    # Calculate arrow position
-    arrow_x = loadings_biplot[i, 0] * scale_factor
-    arrow_y = loadings_biplot[i, 1] * scale_factor
-    
-    # Add arrow as a line with annotation
-    fig_biplot_enhanced.add_trace(go.Scatter(
-        x=[0, arrow_x],
-        y=[0, arrow_y],
-        mode='lines',
-        line=dict(
-            color='black',
-            width=1.5
-        ),
-        showlegend=False,
-        hoverinfo='skip'
-    ))
-    
-    # Add arrowhead
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x,
-        y=arrow_y,
-        ax=0.0,
-        ay=0.0,
-        xref='x',
-        yref='y',
-        axref='x',
-        ayref='y',
-        showarrow=True,
-        arrowhead=2,
-        arrowsize=1.5,
-        arrowwidth=1.5,
-        arrowcolor='black',
-    )
-    
-    # Add feature labels with better positioning
-    label_offset = 1.05
-    # Use display name if available, otherwise use original name
-    display_name = feature_display_names.get(feature, feature)
-    
-    fig_biplot_enhanced.add_annotation(
-        x=arrow_x * label_offset,
-        y=arrow_y * label_offset,
-        text=f'<b>{display_name}</b>',
-        showarrow=False,
-        font=dict(
-            size=16,
-            color='black',
-            family='Arial Black'
-        ),
-    )
-
-# Add grid lines at origin
-fig_biplot_enhanced.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-fig_biplot_enhanced.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.5)
-
-# Add square frame around the plot
-fig_biplot_enhanced.add_shape(
-    type="rect",
-    x0=-1, y0=-1, x1=1, y1=1,
-    line=dict(color="black", width=2),
-    fillcolor="rgba(0,0,0,0)"
-)
-
-# Update layout with enhanced styling
-fig_biplot_enhanced.update_layout(
-    title=dict(
-        text=f'<b>PCA Biplot - Samples and Feature Loadings</b><br>' +
-             f'<sub>Variance Explained: PC1={pca_biplot.explained_variance_ratio_[0]*100:.1f}%, ' +
-             f'PC2={pca_biplot.explained_variance_ratio_[1]*100:.1f}%</sub>',
-        x=0.5,
-        xanchor='center',
-        font=dict(size=16)
-    ),
-    xaxis_title=f'<b>PC1 ({pca_biplot.explained_variance_ratio_[0]*100:.1f}%)</b>',
-    yaxis_title=f'<b>PC2 ({pca_biplot.explained_variance_ratio_[1]*100:.1f}%)</b>',
-    width=1000,
-    height=800,
-    showlegend=True,
-    legend=dict(
-        title=dict(text='<b>Clusters</b>'),
-        orientation='v',
-        x=1.02,
-        y=1.0,
-        bgcolor='rgba(255, 255, 255, 0.8)',
-        bordercolor='black',
-        borderwidth=1
-    ),
-    plot_bgcolor='rgba(245, 245, 245, 0.5)',
-    xaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        range=[-1, 1],
-        tickfont=dict(size=16),
-        constrain='domain'
-    ),
-    yaxis=dict(
-        gridcolor='white',
-        gridwidth=2,
-        zeroline=True,
-        zerolinewidth=2,
-        zerolinecolor='black',
-        scaleanchor='x',
-        scaleratio=1,
-        range=[-1, 1],
-        tickfont=dict(size=18),
-        constrain='domain'
-    ),
-    font=dict(size=16)
-)
-
-# Save the biplot figure
-fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
-print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
-
-
-# show_figure(fig_biplot_enhanced)  # Removed figure #6
-
-# Print loading values in a formatted table
-print("\nFeature Loadings on PC1 and PC2:")
-print("-" * 50)
-print(f"{'Feature':<12} {'PC1 Loading':>12} {'PC2 Loading':>12} {'Vector Length':>14}")
-print("-" * 50)
-for i, feature in enumerate(input_columns):
-    vector_length = np.sqrt(loadings_biplot[i, 0]**2 + loadings_biplot[i, 1]**2)
-    print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
-
-print("="*50 + "\n")
 # Create enhanced biplot with improved visualization
 print("\n" + "="*50)
 print("Creating Enhanced PCA Biplot")
@@ -2634,3 +1367,108 @@ for i, feature in enumerate(input_columns):
     print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
 
 print("="*50 + "\n")
+
+
+# -----------------------------------------
+# Dendrogram plot
+# -----------------------------------------
+fig = plt.figure(figsize=(10, 8))
+
+# Axis settings
+left, bottom, width, height = 0.1, 0.35, 0.8, 0.35
+ax1 = fig.add_axes([left, bottom, width, height])
+
+# Customize the colors of the clusters
+# colors=['#BA2F29', '#E9C832', '#8EBA42', '#67ACE6']
+# NB! First plotly color is skipped to align with the coloring above
+colors = [  # Convert from "rgb(123, 123, 123)" to "#445566"
+    '#%02X%02X%02X' % tuple(map(int, c.strip("rgb() ").split(",")))
+    for c in DEFAULT_PLOTLY_COLORS[1:]
+]
+hierarchy.set_link_color_palette(colors)
+
+# Plot the dendrogram using the built-in scipy function
+# Ideally, we could use maxclust directly, like we do with fcluster:
+#   hierarchy.fcluster(links, i, 'maxclust')
+# However, this is not supported in dendrogram, so we need to find
+# the appropriate distance threshold to get the desired number of clusters
+max_d = 0.7
+for _ in range(20):
+    # Don't plot yet, this is just to get the number of clusters
+    dendrogram = hierarchy.dendrogram(
+        links,
+        leaf_rotation=90,
+        leaf_font_size=0,
+        color_threshold=max_d,
+        above_threshold_color='grey',
+        no_plot=True
+    )
+    d_clusts = len(set(dendrogram['leaves_color_list']))
+    if d_clusts == final_n_clusters:
+        break
+    if d_clusts < final_n_clusters:
+        max_d *= 0.8
+    if d_clusts > final_n_clusters:
+        max_d *= 1.2
+else:
+    # This can happen if e.g. two clusters are very close together
+    print(f"Warning: Could not find a distance threshold to get {final_n_clusters} clusters")
+
+
+# Main dendrogram plot
+print(f"Using distance threshold {max_d:.3f} to get {d_clusts} clusters")
+dendrogram = hierarchy.dendrogram(
+        links,
+        leaf_rotation=90,
+        leaf_font_size=0,
+        color_threshold=max_d,
+        above_threshold_color='grey',
+)
+hierarchy.set_link_color_palette(None)
+ax1.axhline(y=max_d, linestyle='-.', color='k', lw=1.25) 
+ax1.set_ylabel('Linkage distance', fontsize=13)
+ax1.set_yticklabels([0, 5, 10, 15, 20, 25, 30, 35], fontsize=10)
+ax1.set_xticks([])
+ax1.spines['top'].set_linewidth(1.25)
+ax1.spines['bottom'].set_linewidth(1.25)
+ax1.spines['left'].set_linewidth(1.25)
+ax1.spines['right'].set_linewidth(1.25)
+# ax1.text(150, 20.5, '$Phenon$' + ' ' + '$Line$', fontsize=12)
+
+
+# The bottom figure showing the cluster names
+left, bottom, width, height = 0.1, 0.15, 0.8, 0.2
+ax2 = fig.add_axes([left, bottom, width, height])
+ax2.set_xlim(0, (len(links) + 1) * 10)
+ax2.set_ylim(0, 2)
+
+
+# Dot line to split each cluster 
+unique, counts = np.unique(dendrogram['leaves_color_list'], return_counts=True)
+cluster_size_dict = dict(zip(unique, counts))
+cluster_size = [
+    cluster_size_dict[clr]
+    for clr in dict.fromkeys(dendrogram['leaves_color_list'])
+]
+boundaries = np.cumsum(cluster_size) * 10
+for i in range(final_n_clusters - 1):
+    ax2.plot([boundaries[i], boundaries[i]], [1.5, 2.0], linestyle='--', color='k', lw=1.5) 
+
+ax2.set_xticks([])
+ax2.set_yticks([])
+    
+ax2.spines['top'].set_color('none')
+ax2.spines['bottom'].set_color('none')
+ax2.spines['left'].set_color('none')
+ax2.spines['right'].set_color('none')
+
+# Add cluster labels for arbitrary number of clusters
+extended_boundaries = np.concatenate([[0], boundaries])
+for i in range(final_n_clusters):
+    left_bound = extended_boundaries[i]
+    right_bound = extended_boundaries[i + 1]
+    center_x = left_bound + (right_bound - left_bound) / 2
+    ax2.text(center_x, 1.5, f'C{i+1} \nN={cluster_size[i]}', ha='center', va='bottom', fontsize=12)
+
+plt.show()
+# ----------------------------------------

@@ -23,19 +23,17 @@ from IPython.display import Image
 from scipy.interpolate import griddata
 
 
-# Parameters
+# --------------------------------------------------------
+# Input and settings
+# --------------------------------------------------------
 
 # data_path = Path('H:\\Python\\Self_Org_Map\\As_Progr_for-Som\\A0_Es_Final_2\\a_data_Paper.csv')
 data_path = Path(__file__).parent / 'a_data_Paper.csv'
 input_columns = ['F4','F5','F7','F8','F9', 'pH_L']
 
-
-
 som_nx = None  # Set to None to determine these automatically (PCA)
 som_ny = None
 #________________________________________________
-
-
 
 # Exp 3 clusters with QE = 0.13 and TE = 0.0
 som_sigma = 2.4
@@ -43,19 +41,11 @@ som_learning_rate = 0.37
 som_random_seed = 10
 som_max_iterations = 6000
 
-
-
 som_activation_distance = 'euclidean'
 som_topology = 'hexagonal'
 som_neighborhood_function = 'gaussian'
 
-
-# Paths
-
-links_data = Path(__file__).parent / "links.txt"
-
 max_clusters = 10  # Maximum number of clusters to test
- 
 number_of_clusters = None  # Set to None to pick the optimal number automatically
 
 
@@ -102,12 +92,316 @@ isoline_styles = {
     'F9': {0.48: 'solid'},
 }
 
+
+# --------------------------------------------------------
+# Utility functions
+# --------------------------------------------------------
+
+
 # Convenience function to allow changing between interactive and static images
 def show_figure(fig: go.Figure):
     if plotly_interactive:
         fig.show()
     else:
         return Image(data=fig.to_image(format='png', scale=2))
+
+
+def apply_normalization(arr):
+    data_min = arr.min(axis=0)
+    data_range = arr.max(axis=0) - data_min
+
+    return (arr - data_min) / data_range
+
+
+# --------------------------------------------------------
+# Data processing and SOM training
+# --------------------------------------------------------
+
+# Read input data
+df = pd.read_csv(data_path)
+input_array = df[input_columns].values
+transformed_data = apply_normalization(input_array)
+
+# Derive SOM dimensions
+if som_nx is None or som_ny is None:
+    recommended_nodes = 5 * np.sqrt(len(df))
+    print(f"Recommended number of nodes: {recommended_nodes:.0f}")
+   
+    # "Naive" approach: square root of the number of samples (with round-off)
+    # final_nx = np.round(np.sqrt(som_m)).astype(int)
+    # final_ny = np.round(som_m / som_nx).astype(int)
+
+    # Perform PCA analysis
+    pca = PCA(n_components=2)
+    pca.fit(transformed_data)
+
+    # Calculate the ratio between the first two principal components
+    pca_ratio = pca.explained_variance_[0] / pca.explained_variance_[1]
+    final_nx = np.round(np.sqrt(recommended_nodes * pca_ratio)).astype(int)
+    final_ny = np.round(recommended_nodes / final_nx).astype(int)
+    print(f"Using PCA to determine SOM dimensions: {final_nx} x {final_ny} (PCA ratio: {pca_ratio:.2f})")
+else:
+    final_nx, final_ny = som_nx, som_ny
+    print(f"Using fixed SOM dimensions: {final_nx} x {final_ny}")
+
+# Print all principal components values
+print(f"Principal component values: {pca.explained_variance_}")
+
+# Set up model
+som = minisom.MiniSom(
+    final_nx,
+    final_ny,
+    len(input_columns),
+    sigma=som_sigma,
+    learning_rate=som_learning_rate,
+    activation_distance=som_activation_distance,
+    topology=som_topology,
+    neighborhood_function=som_neighborhood_function,
+    random_seed=som_random_seed,
+)
+
+# Train
+som.train(transformed_data, som_max_iterations)
+
+# Extract data
+xx, yy = som.get_euclidean_coordinates()
+umatrix = som.distance_map()
+weights = som.get_weights()
+win_map = som.win_map(transformed_data, return_indices = True)
+
+# Per-feature normalisation of weights to the 0-1 interval.
+# Many downstream operations (isolines, colour mapping, PC-neuron maps,
+# statistics) work in this normalised space.  The original `weights` array
+# is kept unchanged for tasks that need the transformed-data scale (e.g.
+# hierarchical clustering).
+weights_normalized = np.empty_like(weights)
+for _k in range(weights.shape[2]):
+    _wk = weights[:, :, _k]
+    _wk_min, _wk_max = _wk.min(), _wk.max()
+    weights_normalized[:, :, _k] = (_wk - _wk_min) / (_wk_max - _wk_min)
+
+# Print quantization and topographic errors for the trained model
+print(f"Quantization error: {som.quantization_error(transformed_data)}")
+print(f"Topographic error : {som.topographic_error(transformed_data)}")
+
+# Range of SOM grid sizes to test
+grid_sizes = range(2, 14)
+
+# Setup input to clustering and dendrogram plot
+mij = np.meshgrid(np.arange(final_nx), np.arange(final_ny), indexing='ij')
+cells_ij = np.column_stack((mij[0].flat, mij[1].flat))
+labels = [(i, j) for i, j in cells_ij]
+flat_weights = weights.reshape(-1, len(input_columns)) 
+
+# --------------------------------------------------------
+# Clustering and dendrogram
+# --------------------------------------------------------
+
+# Calculate link
+links = hierarchy.linkage(flat_weights, method='complete', metric='euclidean')
+
+# Clustering
+cluster_results = []
+for i in range(2, max_clusters):
+    flat_labels = hierarchy.fcluster(links, i, 'maxclust')
+    sil = silhouette_score(flat_weights, flat_labels) if len(set(flat_labels)) == i else None
+    cluster_results.append({
+        "Number of clusters": i,
+        "Silhouette": sil,
+        "labels": flat_labels,
+    })
+
+cluster_df = pd.DataFrame.from_dict(cluster_results)
+
+sil_optimal_cluster = cluster_df.iloc[cluster_df['Silhouette'].idxmax()]
+
+if number_of_clusters is None:
+    selected_cluster = sil_optimal_cluster
+else:
+    selected_cluster = cluster_df[cluster_df['Number of clusters'] == number_of_clusters].iloc[0]
+
+print(f"Optimal number of clusters based on Silhouette : {sil_optimal_cluster['Number of clusters']}")
+
+print()
+
+if number_of_clusters is None:
+    print(f"Number of clusters picked based on Silhouette     : {selected_cluster['Number of clusters']}")
+    final_n_clusters = selected_cluster['Number of clusters']
+else:
+    print(f"Number of clusters fixed to                    : {number_of_clusters}")
+    final_n_clusters = number_of_clusters
+
+fig = px.line(cluster_df, x='Number of clusters', y='Silhouette', markers=True)
+fig.layout.title = "Silhouette score (higher is better)"
+fig.layout.yaxis.spikesnap = "hovered data"
+fig.layout.yaxis.spikemode = "across"
+fig.layout.yaxis.spikethickness = 2
+show_figure(fig)
+
+# Optimal number of lables
+node_labels = selected_cluster['labels'].reshape(final_nx, final_ny)
+
+# Sample labels
+sample_ij = [None] * len(df)
+sample_label = [-1] * len(df)
+for key, value in win_map.items():
+    for ix in value:
+        sample_ij[ix] = key
+        sample_label[ix] = node_labels[key]
+
+df['ij'] = sample_ij
+df['cluster_label'] = sample_label
+
+# Print samples in each cluster
+n_cols = 8
+for lab, sub_df in df.groupby('cluster_label'):
+    print(f"Cluster {lab}: {len(sub_df)} samples")
+    for i, s in enumerate(sub_df['Sample']):
+        print(f"  {s:19}", end="")
+        if i % n_cols == n_cols - 1:
+            print()
+    print("\n")
+
+# --------------------------------------------------------
+# Utility functions for visualization
+# --------------------------------------------------------
+
+def hexagon(_xx, _yy, radius):
+    # Returns a NX x NY x 6 x 2 array of hexagon coordinates
+    hex_xy = np.zeros((_xx.shape[0], _xx.shape[1], 7, 2))
+    for i in range(7):
+        theta = np.pi / 6 + 2 * np.pi * i / 6
+        hex_xy[:, :, i, 0] = _xx + radius * np.cos(theta)
+        hex_xy[:, :, i, 1] = _yy + radius * np.sin(theta)
+    return hex_xy
+
+
+def add_cluster_boundaries(fig: go.Figure, row_index, col_index):
+    for k, boundary in cluster_boundaries.items():
+        
+        if boundary.geom_type == 'Polygon':
+            bnds = [boundary]
+        elif boundary.geom_type == 'MultiPolygon':
+            bnds = list(boundary.geoms)
+        else:
+            raise NotImplementedError(boundary.geom_type)
+        
+        for poly in bnds:
+            if poly.boundary.geom_type == 'LineString':
+                crds = np.array(poly.boundary.coords)
+            else:
+                crds = np.array(poly.boundary.geoms[0].coords)
+
+            fig.add_scatter(
+                x=crds[:, 0],
+                y=crds[:, 1],
+                # fill='toself',
+                mode="lines",
+                showlegend=False,
+                line=dict(color='black', width=2),
+                row=row_index,
+                col=col_index,
+            )
+
+
+def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings):
+    if feature_index >= weights_normalized.shape[2]:
+        w = umatrix.copy()
+        # Normalise u-matrix to 0-1 for colour mapping
+        w_min, w_max = w.min(), w.max()
+        w_01 = (w - w_min) / (w_max - w_min)
+    else:
+        # Use pre-computed normalised weights (0-1 per feature)
+        w_01 = weights_normalized[:, :, feature_index]
+        w = weights[:, :, feature_index]
+        w_min, w_max = w.min(), w.max()
+
+    colors = np.array(
+        sample_colorscale(features_colorscale, w_01.flatten())
+    ).reshape(final_nx, final_ny)
+
+
+    # Add colored hexagons
+    for i in range(final_nx):
+        for j in range(final_ny):
+            text = str(sorted(df.iloc[win_map[(i, j)]].index.values.tolist()))
+
+            fig.add_scatter(
+                x=hexagons[i, j, :, 0],
+                y=hexagons[i, j, :, 1],
+                fill='toself',
+                mode='lines',
+                fillcolor=colors[i, j],
+                line=dict(color='black', width=0),
+                text=text,
+                showlegend=False,
+                hoverinfo="text",
+                hoveron="fills",
+                row=row,
+                col=col,
+            )
+
+    # Add invisible scatter for colourbar (with original weights for correct tick values)
+    fig.add_scatter(
+        x=[0, 0],
+        y=[0, 0],
+        showlegend=False,
+        marker=dict(
+            color=[w_min, w_max],
+            colorscale=features_colorscale,
+            size=0.001,
+            colorbar=colorbar_settings
+        ),
+        row=row,
+        col=col,
+    )
+
+
+def add_training_cells(fig: go.Figure, row, col, show_sum = True):
+    # Add colored hexagons
+    label_colors = DEFAULT_PLOTLY_COLORS
+    for i in range(final_nx):
+        for j in range(final_ny):
+            text = ""
+            if len(win_map[(i, j)]) > 0:
+                if show_sum:
+                    text = f"{len(win_map[(i, j)])}"
+                else:
+                    if "Sample" in df.columns and not show_cluster_sample_names:
+                        names = df.iloc[win_map[(i, j)]]["Sample"]
+                    else:
+                        names = df.iloc[win_map[(i, j)]].index
+                    samples = [str(s) for s in sorted(names.values.tolist())]
+                    text = f"{'<br>'.join(samples)}"
+
+            fig.add_scatter(
+                x=hexagons[i, j, :, 0],
+                y=hexagons[i, j, :, 1],
+                fill='toself',
+                mode='lines',
+                fillcolor=label_colors[node_labels[i, j]],
+                line=dict(width=0),
+                text=text,
+                showlegend=False,
+                hoverinfo="text",
+                hoveron="fills",
+                row=row,
+                col=col,
+            )
+
+            mid = (hexagons[i, j, 0, :] + hexagons[i, j, 3, :]) / 2
+            fig.add_scatter(
+                x=[mid[0]],
+                y=[mid[1]],
+                mode="text",
+                text=text,
+                textfont=dict(color="black", size=10),
+                marker=dict(color='black'),
+                showlegend=False,
+                hoverinfo="none",
+                row=row,
+                col=col,
+            )
 
 
 def add_isolines_to_som(fig, som_weights, coords, feature_name, isoline_values, row, col,
@@ -194,274 +488,50 @@ def add_pc1_isolines(fig, coords, pc1_neuron_map, pc1_isoline_value, row, col):
             )
 
 
-# Read input data
-df = pd.read_csv(data_path)
-
-
-# Apply data transformation
-
-# Normalization:
-def apply_normalization(arr):
-    data_min = arr.min(axis=0)
-    data_range = arr.max(axis=0) - data_min
-
-    return (arr - data_min) / data_range
-
-# Transforms data into a range [-1, 1].
-    #return ((2*(arr - data_min))/ data_range)-1
-
-
-# # Standardization
-# def apply_standardization(arr):
-#     data_mean = arr.mean(axis=0)
-#     data_std = arr.std(axis=0)
-#     return (arr - data_mean) / data_std
-
-# # Sigmoid
-# def apply_sigmoid(arr):
-#     return 1 / (1 + np.exp(-arr))
-
-
-input_array = df[input_columns].values
-
-## Uncomment the appropriate transform
-transformed_data = apply_normalization(input_array)
-# transformed_data = apply_standardization(input_array)
-# transformed_data = apply_sigmoid(input_array)
-
-#print(f"Transformed data shape: {transformed_data}")
-
-# Derive SOM dimensions
-if som_nx is None or som_ny is None:
-    recommended_nodes = 5 * np.sqrt(len(df))
-    print(f"Recommended number of nodes: {recommended_nodes:.0f}")
-   
-    # "Naive" approach: square root of the number of samples (with round-off)
-    # final_nx = np.round(np.sqrt(som_m)).astype(int)
-    # final_ny = np.round(som_m / som_nx).astype(int)
-
-    # Perform PCA analysis
-    pca = PCA(n_components=2)
-    pca.fit(transformed_data)
-
-    # Calculate the ratio between the first two principal components
-    pca_ratio = pca.explained_variance_[0] / pca.explained_variance_[1]
-    final_nx = np.round(np.sqrt(recommended_nodes * pca_ratio)).astype(int)
-    final_ny = np.round(recommended_nodes / final_nx).astype(int)
-    print(f"Using PCA to determine SOM dimensions: {final_nx} x {final_ny} (PCA ratio: {pca_ratio:.2f})")
-else:
-    final_nx, final_ny = som_nx, som_ny
-    print(f"Using fixed SOM dimensions: {final_nx} x {final_ny}")
-
-# Print all principal components values
-print(f"Principal component values: {pca.explained_variance_}")
-#print(f"Principal component ratio: {pca.explained_variance_ratio_}")
-
-
-
-# Set up model
-som = minisom.MiniSom(
-    final_nx,
-    final_ny,
-    len(input_columns),
-    sigma=som_sigma,
-    learning_rate=som_learning_rate,
-    activation_distance=som_activation_distance,
-    topology=som_topology,
-    neighborhood_function=som_neighborhood_function,
-    random_seed=som_random_seed,
-)
-
-# Train
-som.train(transformed_data, som_max_iterations)
-
-# Extract data
-xx, yy = som.get_euclidean_coordinates()
-umatrix = som.distance_map()
-weights = som.get_weights()
-
-# Per-feature normalisation of weights to the 0-1 interval.
-# Many downstream operations (isolines, colour mapping, PC-neuron maps,
-# statistics) work in this normalised space.  The original `weights` array
-# is kept unchanged for tasks that need the transformed-data scale (e.g.
-# hierarchical clustering).
-weights_normalized = np.empty_like(weights)
-for _k in range(weights.shape[2]):
-    _wk = weights[:, :, _k]
-    _wk_min, _wk_max = _wk.min(), _wk.max()
-    weights_normalized[:, :, _k] = (_wk - _wk_min) / (_wk_max - _wk_min)
-
-win_map = som.win_map(transformed_data, return_indices = True)
-
-# Print quantization and topographic errors for the trained model
-print(f"Quantization error: {som.quantization_error(transformed_data)}")
-print(f"Topographic error : {som.topographic_error(transformed_data)}")
-
-
-# Range of SOM grid sizes to test
-grid_sizes = range(2, 14)
-
-# Store QE and TE for each grid size
-qe_values = []
-te_values = []
-
-for size in grid_sizes:
-    # Initialize and train SOM
-    som = minisom.MiniSom(size, size, transformed_data.shape[1], som_sigma, som_learning_rate)
-    som.random_weights_init(transformed_data)
-    som.train_random(transformed_data, som_max_iterations)
-
-    # Calculate and store QE
-    qe = som.quantization_error(transformed_data)
-    qe_values.append(qe)
-
-     # Calculate and store TE
-    te = som.topographic_error(transformed_data)
-    te_values.append(te)
-
-#Printing QE and TE values
-
-# for size in grid_sizes:
-#     print(f"Quantization error: Som size {qe_values, size}\n")
-
-# for size in grid_sizes:
-#     print(f"Topographic error: Som size {te_values, size}\n")
-
-# #Plot U-Matrix
-# fig = px.imshow(
-#     umatrix,
-#     color_continuous_scale=features_colorscale,
-#     title="U-Matrix",
-#     labels=dict(x="X", y="Y"),
+def add_pc2_isolines(fig, coords, hexagons, feature_name, row, col):
+    """
+    Add PC2 isoline to a SOM plane based on PC2 neuron values.
+    This ensures the same geometric line across all feature plots.
+    """
+    xx, yy = coords
     
-# )
-#     # print("\n")
-#     # print("\t\n")
-#     # print("\n")
-
-# Setup input to clustering and dendrogram plot
-mij = np.meshgrid(np.arange(final_nx), np.arange(final_ny), indexing='ij')
-cells_ij = np.column_stack((mij[0].flat, mij[1].flat))
-labels = [(i, j) for i, j in cells_ij]
-flat_weights = weights.reshape(-1, len(input_columns)) 
-
-# --------------------------------------------------------
-# Clustering and dendrogram
-# --------------------------------------------------------
-
-# Calculate links and save to file
-links = hierarchy.linkage(flat_weights, method='complete', metric='euclidean')
-np.savetxt(links_data, links)
-
-# Clustering
-
-cluster_results = []
-
-for i in range(2, max_clusters):
-    flat_labels = hierarchy.fcluster(links, i, 'maxclust')
-    #dbi = davies_bouldin_score(flat_weights, flat_labels) if len(set(flat_labels)) == i else None
-    sil = silhouette_score(flat_weights, flat_labels) if len(set(flat_labels)) == i else None
-    cluster_results.append({
-        "Number of clusters": i,
-        #"DBI": dbi,
-        "Silhouette": sil,
-        "labels": flat_labels,
-    })
-
-cluster_df = pd.DataFrame.from_dict(cluster_results)
-
-
-#dbi_optimal_cluster = cluster_df.iloc[cluster_df['DBI'].idxmin()]
-sil_optimal_cluster = cluster_df.iloc[cluster_df['Silhouette'].idxmax()]
-
-if number_of_clusters is None:
-    selected_cluster = sil_optimal_cluster
-    #selected_cluster = dbi_optimal_cluster
-else:
-    selected_cluster = cluster_df[cluster_df['Number of clusters'] == number_of_clusters].iloc[0]
-
-#print(f"Optimal number of clusters based on DBI        : {dbi_optimal_cluster['Number of clusters']}")
-print(f"Optimal number of clusters based on Silhouette : {sil_optimal_cluster['Number of clusters']}")
-
-print()
-
-if number_of_clusters is None:
-    print(f"Number of clusters picked based on Silhouette     : {selected_cluster['Number of clusters']}")
-    # print(f"Number of clusters picked based on DBI         : {selected_cluster['Number of clusters']}")
-    final_n_clusters = selected_cluster['Number of clusters']
-else:
-    print(f"Number of clusters fixed to                    : {number_of_clusters}")
-    final_n_clusters = number_of_clusters
-
-# fig = px.line(cluster_df, x='Number of clusters', y='DBI', markers=True)
-# fig.layout.title = "Davies-Bouldin Index (lower is better)"
-# fig.layout.yaxis.spikesnap = "hovered data"
-# fig.layout.yaxis.spikemode = "across"
-# fig.layout.yaxis.spikethickness = 1
-
-fig = px.line(cluster_df, x='Number of clusters', y='Silhouette', markers=True)
-fig.layout.title = "Silhouette score (higher is better)"
-fig.layout.yaxis.spikesnap = "hovered data"
-fig.layout.yaxis.spikemode = "across"
-fig.layout.yaxis.spikethickness = 2
-#fig
-show_figure(fig)
-#plt.show()
-
-
-# Save separate CSV file the cluster results with silhouette scores
-cluster_df.to_excel("Silhouette_cluster_results.xlsx", index=False)
-
-# Optimal number of lables
-node_labels = selected_cluster['labels'].reshape(final_nx, final_ny)
-
-# Sample labels
-sample_ij = [None] * len(df)
-sample_label = [-1] * len(df)
-for key, value in win_map.items():
-    for ix in value:
-        sample_ij[ix] = key
-        sample_label[ix] = node_labels[key]
-
-df['ij'] = sample_ij
-df['cluster_label'] = sample_label
-
-
-n_cols = 8
-for lab, sub_df in df.groupby('cluster_label'):
-    print(f"Cluster {lab}: {len(sub_df)} samples")
-    for i, s in enumerate(sub_df['Sample']):
-        print(f"  {s:19}", end="")
-        if i % n_cols == n_cols - 1:
-            print()
-    print("\n")
+    # Create interpolated grid for smoother contours using PC2 neuron map
+    points = np.column_stack([xx.flatten(), yy.flatten()])
+    values = pc2_neuron_map.flatten()
     
+    # Create fine grid
+    grid_x = np.linspace(xx.min(), xx.max(), 100)
+    grid_y = np.linspace(yy.min(), yy.max(), 100)
+    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
+    
+    # Interpolate PC2 values
+    grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
+    
+    # Generate contour for PC2 isoline value
+    fig_temp = plt.figure()
+    ax_temp = fig_temp.add_subplot(111)
+    contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc2_isoline_value], colors='black', linewidths=2)
+    plt.close(fig_temp)
+    
+    # Extract contour paths and add to plotly figure
+    if len(contours.allsegs) > 0:
+        for path in contours.allsegs[0]:
+            fig.add_scatter(
+                x=path[:, 0],
+                y=path[:, 1],
+                mode='lines',
+                line=dict(color='darkblue', width=5.0, dash='dot'),
+                showlegend=False,
+                hoverinfo='skip',
+                row=row,
+                col=col
+            )
 
-t = ""
-for lab, sub in df.groupby('cluster_label'):
-    t += f"<h2>Cluster {lab}</h2>"
-    t += " ".join(sub["Sample"])
-    t += sub.describe().to_html()
-#display_html(t, raw=True)
-
-
-# --------------------------------------------------------
-# Plotting and Visualization
-# --------------------------------------------------------
-
-# Create hexagons for visualization
-def hexagon(_xx, _yy, radius):
-    # Returns a NX x NY x 6 x 2 array of hexagon coordinates
-    hex_xy = np.zeros((_xx.shape[0], _xx.shape[1], 7, 2))
-    for i in range(7):
-        theta = np.pi / 6 + 2 * np.pi * i / 6
-        hex_xy[:, :, i, 0] = _xx + radius * np.cos(theta)
-        hex_xy[:, :, i, 1] = _yy + radius * np.sin(theta)
-    return hex_xy
-
+# -------------------------------------------------------
+# Generate plots
+# -------------------------------------------------------
 
 hexagons = hexagon(xx, yy, 0.5)
-hexagons.shape
 
 # Cluster polygons
 node_hexagons = hexagon(xx, yy, np.sqrt(3) / 3 + 0.001).reshape(-1, 7, 2)
@@ -470,134 +540,6 @@ for c in np.unique(node_labels):
     matches = node_labels.flatten() == c
     joined_polygon = shapely.union_all([shapely.Polygon(p) for p in node_hexagons[matches]])
     cluster_boundaries[c] = joined_polygon
-
-# Define functions for plotting
-def add_cluster_boundaries(fig: go.Figure, row_index, col_index):
-    for k, boundary in cluster_boundaries.items():
-        
-        if boundary.geom_type == 'Polygon':
-            bnds = [boundary]
-        elif boundary.geom_type == 'MultiPolygon':
-            bnds = list(boundary.geoms)
-        else:
-            raise NotImplementedError(boundary.geom_type)
-        
-        for poly in bnds:
-            if poly.boundary.geom_type == 'LineString':
-                crds = np.array(poly.boundary.coords)
-            else:
-                crds = np.array(poly.boundary.geoms[0].coords)
-
-            fig.add_scatter(
-                x=crds[:, 0],
-                y=crds[:, 1],
-                # fill='toself',
-                mode="lines",
-                showlegend=False,
-                line=dict(color='black', width=2),
-                row=row_index,
-                col=col_index,
-            )
-
-
-def add_som_features(fig: go.Figure, row, col, feature_index, colorbar_settings):
-    if feature_index >= weights_normalized.shape[2]:
-        w = umatrix.copy()
-        # Normalise u-matrix to 0-1 for colour mapping
-        w_min, w_max = w.min(), w.max()
-        w_01 = (w - w_min) / (w_max - w_min)
-    else:
-        # Use pre-computed normalised weights (0-1 per feature)
-        w_01 = weights_normalized[:, :, feature_index]
-        w = weights[:, :, feature_index]
-        w_min, w_max = w.min(), w.max()
-
-    colors = np.array(
-        sample_colorscale(features_colorscale, w_01.flatten())
-    ).reshape(final_nx, final_ny)
-
-
-    # Add colored hexagons
-    for i in range(final_nx):
-        for j in range(final_ny):
-            text = str(sorted(df.iloc[win_map[(i, j)]].index.values.tolist()))
-
-            fig.add_scatter(
-                x=hexagons[i, j, :, 0],
-                y=hexagons[i, j, :, 1],
-                fill='toself',
-                mode='lines',
-                fillcolor=colors[i, j],
-                line=dict(color='black', width=0),
-                text=text,
-                showlegend=False,
-                hoverinfo="text",
-                hoveron="fills",
-                row=row,
-                col=col,
-            )
-  #_____________________________________________________________________________________________________________________         
-   # Es Vertical colorbar
-    fig.add_scatter(
-        x=[0, 0],
-        y=[0, 0],
-        showlegend=False,
-        marker=dict(
-            color=[w_min, w_max],
-            colorscale=features_colorscale,
-            size=0.001,
-            colorbar=colorbar_settings
-        ),
-        row=row,
-        col=col,
-    )
-
-
-def add_training_cells(fig: go.Figure, row, col, show_sum = True):
-    # Add colored hexagons
-    label_colors = DEFAULT_PLOTLY_COLORS
-    for i in range(final_nx):
-        for j in range(final_ny):
-            text = ""
-            if len(win_map[(i, j)]) > 0:
-                if show_sum:
-                    text = f"{len(win_map[(i, j)])}"
-                else:
-                    if "Sample" in df.columns and not show_cluster_sample_names:
-                        names = df.iloc[win_map[(i, j)]]["Sample"]
-                    else:
-                        names = df.iloc[win_map[(i, j)]].index
-                    samples = [str(s) for s in sorted(names.values.tolist())]
-                    text = f"{'<br>'.join(samples)}"
-
-            fig.add_scatter(
-                x=hexagons[i, j, :, 0],
-                y=hexagons[i, j, :, 1],
-                fill='toself',
-                mode='lines',
-                fillcolor=label_colors[node_labels[i, j]],
-                line=dict(width=0),
-                text=text,
-                showlegend=False,
-                hoverinfo="text",
-                hoveron="fills",
-                row=row,
-                col=col,
-            )
-
-            mid = (hexagons[i, j, 0, :] + hexagons[i, j, 3, :]) / 2
-            fig.add_scatter(
-                x=[mid[0]],
-                y=[mid[1]],
-                mode="text",
-                text=text,
-                textfont=dict(color="black", size=10),
-                marker=dict(color='black'),
-                showlegend=False,
-                hoverinfo="none",
-                row=row,
-                col=col,
-            )
 
 
 n_plots = len(input_columns) + 2
@@ -658,8 +600,9 @@ large_cluster_fig.layout.xaxis.showticklabels = False
 
 show_figure(large_cluster_fig)
 
-## -------------------------------------------------------
+# --------------------------------------------------------
 # Draw isolines for SOM feature planes
+# --------------------------------------------------------
 
 # Compute per-neuron PC1 score (vectorised: shape [nx, ny])
 n_features = len(input_columns)
@@ -712,80 +655,6 @@ for feat_name in input_columns:
     feat_idx = input_columns.index(feat_name)
     row_idx, col_idx = subplot_ix[feat_idx]
     add_pc1_isolines(features_fig, (xx, yy), pc1_neuron_map, pc1_isoline_value, row_idx, col_idx)
-
-
-
-# Calculate PC1 general isoline value (it must be the same for all features) by equation: (sum(sum(wji*Li))/K), where K is the amount of neurons, wji are the weights of neurons, Li are Lodings of PCA. Construct PC1 isoline on the each feature plot as red dotted line.
-
- 
-# save dataframe as CSV
-# df.to_csv('myoutputSil.csv')
-
-# df = pd.DataFrame(df)
-# df['log_cluster_label'] = np.log(df['cluster_label'])
-# df.to_csv('myoutputforTDS.csv')
-
-
-# Save dataframe as CSV in specified folder
-output_folder = Path('H:/Python/Self_Org_Map/As_Progr_for-Som/A0_Es_Final_2')
-
-df = pd.DataFrame(df)
-df['log_cluster_label'] = np.log(df['cluster_label'])
-output_file = output_folder / 'myoutputforTDS.csv'
-try:
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_file, index=False)
-except FileNotFoundError as e:
-    print(f"Error saving file: {e}")
-
-
-# Save each cluster to a separate CSV file
-output_dir = Path(__file__).parent / "cluster_after_factors_forTDS"
-output_dir.mkdir(parents=True, exist_ok=True)
-
-unique_labels = sorted(df['cluster_label'].dropna().unique())
-for cl in unique_labels:
-    sub_df = df[df['cluster_label'] == cl]
-    out_path = output_dir / f"myoutputSil_cluster_label_{int(cl)}.csv"
-    sub_df.to_csv(out_path, index=False)
-
-# Increase font size of numbers on colorbars
-for tr in features_fig.data:
-    if hasattr(tr, 'marker') and getattr(tr.marker, 'colorbar', None):
-        tr.marker.colorbar.update(tickfont=dict(size=18))
-
-# Shows SOM planes with vertical scale bar
-# show_figure(features_fig)
-
-
-
-
- # Force all horizontal colorbars (fig_new / fig_sep) to span 0..1 with plt.stepstep 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
-# Commented out to keep vertical colorbars
-# for _fig in [locals().get('features_fig')]:
-#     if not _fig:
-#         continue
-#     for tr in _fig.data:
-#         mk = getattr(tr, 'marker', None)
-#         cb = getattr(mk, 'colorbar', None)
-#         if mk and cb:
-#             cb.update(
-#                 orientation='h',
-#                 thickness=15,
-#                 len=0.25, 
-#                 x=0.5,
-#                 xanchor='center',
-#                 y=-0.15,
-#                 yanchor='top',
-#                 tickvals=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
-#                 ticktext=["0.0", "0.2", "0.4", "0.6", "0.8", "1.0"],
-#                 ticks="outside",
-#                 tickfont=dict(size=18)
-#             )
-
-#Shows SOM planes with horizontal scale bar
-#show_figure(features_fig)
-
 
 # Calculate and print Ward's distance for each feature
 print("\n" + "="*50)
@@ -848,222 +717,10 @@ for feature_name in ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']:
 print("="*50 + "\n")
 
 
-
-
-# Calculate and print correlation matrix between features
-print("\n" + "="*50)
-print("Correlation Matrix Between Features")
-print("="*50)
-
-# Define the features to analyze
-correlation_features = ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']
-
-# Check which features are available in input_columns
-available_features = [f for f in correlation_features if f in input_columns]
-
-if len(available_features) > 1:
-    # Extract the feature indices
-    feature_indices = [input_columns.index(f) for f in available_features]
-    
-    # Get the data for these features from transformed_data
-    feature_data = transformed_data[:, feature_indices]
-    
-    # Calculate correlation matrix
-    correlation_matrix = np.corrcoef(feature_data.T)
-    
-    # Create a DataFrame for better visualization
-    corr_df = pd.DataFrame(
-        correlation_matrix,
-        index=available_features,
-        columns=available_features
-    )
-    
-    print("\nCorrelation Matrix:")
-    print(corr_df.to_string())
-    
-    # Create a heatmap using plotly
-    fig_corr = go.Figure(data=go.Heatmap(
-        z=correlation_matrix,
-        x=available_features,
-        y=available_features,
-        colorscale='RdBu',
-        zmid=0,
-        text=correlation_matrix,
-        texttemplate='%{text:.3f}',
-        textfont={"size": 12},
-        colorbar=dict(title="Correlation")
-    ))
-    
-    fig_corr.update_layout(
-        title='Feature Correlation Matrix',
-        xaxis_title='Features',
-        yaxis_title='Features',
-        width=700,
-        height=600
-    )
-    
-    #show_figure(fig_corr)
-    
-    # Save correlation matrix to CSV
-    corr_df.to_csv('feature_correlation_matrix.csv')
-    print("\nCorrelation matrix saved to 'feature_correlation_matrix.csv'")
-else:
-    print("Not enough features available for correlation analysis")
-
-print("="*50 + "\n")
-
-
-
-# # Save weight values for each neuron of specified features to separate Excel files
-# print("\n" + "="*50)
-# print("Saving Neuron Weight Values to Excel Files")
-# print("="*50)
-
-features_to_save = ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']
-
-for feature_name in features_to_save:
-    if feature_name in input_columns:
-        feat_idx = input_columns.index(feature_name)
-        
-        # Get the weight matrix for this feature
-        feature_weights = weights_normalized[:, :, feat_idx]
-        
-        # Create DataFrame with neuron coordinates
-        neuron_data = []
-        for i in range(final_nx):
-            for j in range(final_ny):
-                neuron_data.append({
-                    'Neuron_X': i,
-                    'Neuron_Y': j,
-                    'Weight': feature_weights[i, j]
-                })
-        
-        neuron_df = pd.DataFrame(neuron_data)
-        
-        # Save to Excel file
-        output_filename = f'neuron_weights_{feature_name}.xlsx'
-        neuron_df.to_excel(output_filename, index=False)
-        
-#         print(f"Saved {feature_name} neuron weights to '{output_filename}'")
-
-# print("="*50 + "\n")
-
-# Save weight values for each neuron of specified features to separate Excel files
-print("\n" + "="*50)
-print("Saving Neuron Weight Values to Excel Files")
-print("="*50)
-
-features_to_save = ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']
-
-# Create output directory for neuron weights
-neuron_weights_dir = Path('H:/Python/Self_Org_Map/As_Progr_for-Som/A0_Es_Final_2/neuron_weights')
-write_neurons = True
-try:
-    neuron_weights_dir.mkdir(parents=True, exist_ok=True)
-except FileNotFoundError as e:
-    print(f"Error creating directory: {e}")
-    write_neurons = False
-
-if write_neurons:
-    for feature_name in features_to_save:
-        if feature_name in input_columns:
-            feat_idx = input_columns.index(feature_name)
-
-            # Get the weight matrix for this feature
-            feature_weights = weights_normalized[:, :, feat_idx]
-
-            # Create DataFrame with neuron coordinates
-            neuron_data = []
-            for i in range(final_nx):
-                for j in range(final_ny):
-                    neuron_data.append({
-                        'Neuron_X': i,
-                        'Neuron_Y': j,
-                        'Weight': feature_weights[i, j]
-                    })
-
-            neuron_df = pd.DataFrame(neuron_data)
-
-            # Save to Excel file in the specified folder
-            output_filename = neuron_weights_dir / f'neuron_weights_{feature_name}.xlsx'
-            neuron_df.to_excel(output_filename, index=False)
-
-#         print(f"Saved {feature_name} neuron weights to '{output_filename}'")
-
-# print("="*50 + "\n")
-
 # Perform PCA on the transformed data
 pca_full = PCA(n_components=2)
 pca_transformed = pca_full.fit_transform(transformed_data)
 
-# Get the loadings (principal components)
-loadings = pca_full.components_.T * np.sqrt(pca_full.explained_variance_)
-
-# # Save weight values for each neuron of specified features to separate Excel files
-# print("\n" + "="*50)
-# print("Saving Neuron Weight Values to Excel Files")
-# print("="*50)
-
-features_to_save = ['F3', 'F4', 'F5', 'F7', 'F8', 'F9']
-
-for feature_name in features_to_save:
-    if feature_name in input_columns:
-        feat_idx = input_columns.index(feature_name)
-        
-        # Get the weight matrix for this feature
-        feature_weights = weights_normalized[:, :, feat_idx]
-        
-        # Create DataFrame with neuron coordinates
-        neuron_data = []
-        for i in range(final_nx):
-            for j in range(final_ny):
-                neuron_data.append({
-                    'Neuron_X': i,
-                    'Neuron_Y': j,
-                    'Weight': feature_weights[i, j]
-                })
-        
-        neuron_df = pd.DataFrame(neuron_data)
-        
-        # Save to Excel file
-        output_filename = f'neuron_weights_{feature_name}.xlsx'
-        neuron_df.to_excel(output_filename, index=False)
-        
-#         print(f"Saved {feature_name} neuron weights to '{output_filename}'")
-
-# print("="*50 + "\n")
-
-
-#Write on the separate word dokument (save in the folder H:\Python\Self_Org_Map\As_Progr_for-Som\A0_Es_Final_2) intepretation of SOM featrures and clusters based on the above analysis. Consider also the PCA biplot and correlation matrix results. Consider cases of movement of the siolines with darkorange color and PC1 isolines. Discuss what the clusters might represent in terms of the original features.
-
-# # Create Word document with SOM interpretation
-# print("\n" + "="*50)
-# print("Creating Word Document with SOM Interpretation")
-# print("="*50)
-
-
-for feature_name in input_columns:
-    feat_idx = input_columns.index(feature_name)
-    
-    # Get the weight matrix for this feature
-    feature_weights = weights_normalized[:, :, feat_idx]
-    
-    # Calculate sum of weights
-    sum_weights = np.sum(feature_weights)
-    
-    # Get PC1 loading for this feature
-    pc1_loading = pca.components_[0, feat_idx]
-    
-#    print(f"{feature_name:10s}: Sum of Weights={sum_weights:8.4f}, PC1 Loading={pc1_loading:7.4f}")
-
-# print("="*50 + "\n")
-
-
-
-# # Calculate PC2 isoline value (mean across all neurons)
-# print("\n" + "="*50)
-# print("PC2 Isoline Value Calculation")
-# print("="*50)
 
 # Calculate PC2 value for each neuron
 pc2_neuron_map = np.zeros((final_nx, final_ny))
@@ -1078,63 +735,6 @@ for i in range(final_nx):
 
 # Use mean PC2 value as the isoline threshold
 pc2_isoline_value = np.mean(pc2_neuron_map)
-
-print(f"\nPC2 Isoline Value (mean): {pc2_isoline_value:.6f}")
-print(f"PC2 range: [{pc2_neuron_map.min():.6f}, {pc2_neuron_map.max():.6f}]")
-print("="*50 + "\n")
-
-
-# # Print PC1 isoline value (red dotted line)
-# print("\n" + "="*50)
-# print("PC1 Isoline Value (Red Dotted Line)")
-# print("="*50)
-# print(f"PC1 Isoline Value: {pc1_isoline_value:.6f}")
-# print(f"This value is constant across all SOM planes")
-# print("="*50 + "\n")
-
-# Add PC2 isolines to all feature plots
-print("\n" + "="*50)
-print("Adding PC2 Isolines to SOM Planes")
-print("="*50)
-
-def add_pc2_isolines(fig, coords, hexagons, feature_name, row, col):
-    """
-    Add PC2 isoline to a SOM plane based on PC2 neuron values.
-    This ensures the same geometric line across all feature plots.
-    """
-    xx, yy = coords
-    
-    # Create interpolated grid for smoother contours using PC2 neuron map
-    points = np.column_stack([xx.flatten(), yy.flatten()])
-    values = pc2_neuron_map.flatten()
-    
-    # Create fine grid
-    grid_x = np.linspace(xx.min(), xx.max(), 100)
-    grid_y = np.linspace(yy.min(), yy.max(), 100)
-    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
-    
-    # Interpolate PC2 values
-    grid_z = griddata(points, values, (grid_xx, grid_yy), method='cubic')
-    
-    # Generate contour for PC2 isoline value
-    fig_temp = plt.figure()
-    ax_temp = fig_temp.add_subplot(111)
-    contours = ax_temp.contour(grid_xx, grid_yy, grid_z, levels=[pc2_isoline_value], colors='black', linewidths=2)
-    plt.close(fig_temp)
-    
-    # Extract contour paths and add to plotly figure
-    if len(contours.allsegs) > 0:
-        for path in contours.allsegs[0]:
-            fig.add_scatter(
-                x=path[:, 0],
-                y=path[:, 1],
-                mode='lines',
-                line=dict(color='darkblue', width=5.0, dash='dot'),
-                showlegend=False,
-                hoverinfo='skip',
-                row=row,
-                col=col
-            )
 
 # Add PC2 isolines to all feature plots (excluding pH_L if needed)
 pc2_features = input_columns.copy()
@@ -1164,13 +764,9 @@ print("="*50 + "\n")
 # Display updated figures
 show_figure(features_fig)
 
-
-
-
-# Create enhanced biplot with improved visualization
-print("\n" + "="*50)
-print("Creating Enhanced PCA Biplot")
-print("="*50)
+# -------------------------------------------------------
+# PCA Biplot
+# -------------------------------------------------------
 
 # Perform PCA on the transformed data (already done above, but ensure it's available)
 pca_biplot = PCA(n_components=2)
@@ -1354,19 +950,7 @@ fig_biplot_enhanced.update_layout(
 fig_biplot_enhanced.write_html('PCA_Biplot_Enhanced.html')
 print("Enhanced PCA biplot saved to 'PCA_Biplot_Enhanced.html'")
 
-
 show_figure(fig_biplot_enhanced)
-
-# Print loading values in a formatted table
-print("\nFeature Loadings on PC1 and PC2:")
-print("-" * 50)
-print(f"{'Feature':<12} {'PC1 Loading':>12} {'PC2 Loading':>12} {'Vector Length':>14}")
-print("-" * 50)
-for i, feature in enumerate(input_columns):
-    vector_length = np.sqrt(loadings_biplot[i, 0]**2 + loadings_biplot[i, 1]**2)
-    print(f"{feature:<12} {loadings_biplot[i, 0]:>12.4f} {loadings_biplot[i, 1]:>12.4f} {vector_length:>14.4f}")
-
-print("="*50 + "\n")
 
 
 # -----------------------------------------

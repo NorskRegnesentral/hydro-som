@@ -70,7 +70,7 @@ plotly_interactive = True
 colorbar_tickvals = [0.0, 0.25, 0.5, 0.75, 1.0]
 colorbar_tickformat = ".2f"
 
-show_cluster_indexes = True
+show_cluster_sample_names = True
 
 # Isoline configuration  ─────────────────────────────────────────────────────
 # Background contour levels drawn per feature (normalised weight-space values)
@@ -136,8 +136,8 @@ def add_isolines_to_som(fig, som_weights, coords, feature_name, isoline_values, 
 
     for isoline_val in isoline_values:
         color = (color_map or {}).get(isoline_val, 'darkgreen')
-        dash  = (style_map or {}).get(isoline_val, 'dash')
-        width = 4.0 if color_map and isoline_val in color_map else 3.0
+        dash  = (style_map or {}).get(isoline_val, 'solid')
+        width = 4.0 if color_map and isoline_val in color_map else 1.0
 
         fig_temp = plt.figure()
         ax_temp  = fig_temp.add_subplot(111)
@@ -563,7 +563,7 @@ def add_training_cells(fig: go.Figure, row, col, show_sum = True):
                 if show_sum:
                     text = f"{len(win_map[(i, j)])}"
                 else:
-                    if "Sample" in df.columns and not show_cluster_indexes:
+                    if "Sample" in df.columns and not show_cluster_sample_names:
                         names = df.iloc[win_map[(i, j)]]["Sample"]
                     else:
                         names = df.iloc[win_map[(i, j)]].index

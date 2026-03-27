@@ -61,6 +61,7 @@ colorbar_tickvals = [0.0, 0.25, 0.5, 0.75, 1.0]
 colorbar_tickformat = ".2f"
 
 show_cluster_sample_names = True
+show_dendrogram_xtick_names = True
 
 # Isoline configuration  ─────────────────────────────────────────────────────
 # Background contour levels drawn per feature (normalised weight-space values)
@@ -956,10 +957,13 @@ show_figure(fig_biplot_enhanced)
 # -----------------------------------------
 # Dendrogram plot
 # -----------------------------------------
-fig = plt.figure(figsize=(10, 8))
+fig = plt.figure(figsize=(10, 14 if show_dendrogram_xtick_names else 8))
 
 # Axis settings
-left, bottom, width, height = 0.1, 0.35, 0.8, 0.35
+if show_dendrogram_xtick_names:
+    left, bottom, width, height = 0.1, 0.55, 0.8, 0.35
+else:
+    left, bottom, width, height = 0.1, 0.35, 0.8, 0.35
 ax1 = fig.add_axes([left, bottom, width, height])
 
 # Customize the colors of the clusters
@@ -1012,7 +1016,25 @@ hierarchy.set_link_color_palette(None)
 ax1.axhline(y=max_d, linestyle='-.', color='k', lw=1.25) 
 ax1.set_ylabel('Linkage distance', fontsize=13)
 ax1.set_yticklabels([0, 5, 10, 15, 20, 25, 30, 35], fontsize=10)
-ax1.set_xticks([])
+if show_dendrogram_xtick_names:
+    n_leaves = len(dendrogram['leaves'])
+    leaf_tick_positions = [5 + k * 10 for k in range(n_leaves)]
+    leaf_tick_labels = []
+    for leaf_idx in dendrogram['leaves']:
+        node_ij = tuple(cells_ij[leaf_idx])
+        sample_indices = win_map.get(node_ij, [])
+        if sample_indices:
+            if "Sample" in df.columns and not show_cluster_sample_names:
+                raw_names = df.iloc[sample_indices]['Sample']
+            else:
+                raw_names = df.iloc[sample_indices].index
+            names = [str(s) for s in sorted(raw_names.tolist())]
+            leaf_tick_labels.append('\n'.join(names))
+        else:
+            leaf_tick_labels.append('')
+    ax1.set_xticks(leaf_tick_positions, labels = leaf_tick_labels, rotation=0, fontsize=7, va='top')
+else:
+    ax1.set_xticks([])
 ax1.spines['top'].set_linewidth(1.25)
 ax1.spines['bottom'].set_linewidth(1.25)
 ax1.spines['left'].set_linewidth(1.25)
@@ -1021,7 +1043,10 @@ ax1.spines['right'].set_linewidth(1.25)
 
 
 # The bottom figure showing the cluster names
-left, bottom, width, height = 0.1, 0.15, 0.8, 0.2
+if show_dendrogram_xtick_names:
+    left, bottom, width, height = 0.1, 0.32, 0.8, 0.12
+else:
+    left, bottom, width, height = 0.1, 0.15, 0.8, 0.2
 ax2 = fig.add_axes([left, bottom, width, height])
 ax2.set_xlim(0, (len(links) + 1) * 10)
 ax2.set_ylim(0, 2)
